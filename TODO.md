@@ -31,7 +31,7 @@ plan changes.
 ## Phase 1 — Skeleton and domain
 
 - [x] `spring init` — Web, Data JPA, PostgreSQL, Validation, Mail, Redis, Flyway.
-- [ ] Docker Compose with `postgres` and `redis` services for local dev.
+- [x] Docker Compose with `postgres` and `redis` services for local dev.
 - [ ] Package structure: `domain`, `ingest`, `persistence`, `alerting`, `api`.
 - [ ] Write the `domain` package with **no Spring imports**:
       - [ ] `AvailabilityEntry` record
