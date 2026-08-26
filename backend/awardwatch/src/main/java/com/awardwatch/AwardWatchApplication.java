@@ -1,4 +1,4 @@
-package com.yourorg.awardwatch;
+package com.awardwatch;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
