@@ -32,7 +32,7 @@ plan changes.
 
 - [x] `spring init` — Web, Data JPA, PostgreSQL, Validation, Mail, Redis, Flyway.
 - [x] Docker Compose with `postgres` and `redis` services for local dev.
-- [ ] Package structure: `domain`, `ingest`, `persistence`, `alerting`, `api`.
+- [x] Package structure: `domain`, `ingest`, `persistence`, `alerting`, `api`.
 - [ ] Write the `domain` package with **no Spring imports**:
       - [ ] `AvailabilityEntry` record
       - [ ] `Program` and `Cabin` enums (Y / W / J / F)
