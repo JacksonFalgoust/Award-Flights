@@ -33,10 +33,23 @@ across live calls made 2026-08-25:
   `/live` access at all, so a genuine success/failure distinction couldn't be
   checked.
 - **Design implication for `QuotaBudgeter`:** cost = number of pages actually
-  fetched, not a fixed per-endpoint constant. `AvailabilitySource.estimatedCost()`
-  should account for expected page count (⌈expected rows / take⌉), and the
-  budgeter should trust `x-ratelimit-remaining` off the response as ground
-  truth rather than relying solely on its own client-side decrement.
+  fetched, not a fixed per-endpoint constant. The budgeter should trust
+  `x-ratelimit-remaining` off the response as ground truth rather than relying
+  solely on its own client-side decrement.
+
+  **Open question — where does estimation live?** An earlier draft of
+  `AvailabilitySource` carried `estimatedCost(RouteQuery)` so the budgeter could
+  reserve quota before a call. That method is not on the interface as built
+  (`ARCHITECTURE.md` §3), and the finding above is the argument against putting it
+  back: cost is pages actually fetched, which is not knowable until the call is
+  under way, so a pre-call `int` is a guess dressed as a contract — and a wrong
+  guess either strands quota or overspends it. Two options, neither chosen yet:
+  reserve a conservative worst case up front and reconcile against
+  `x-ratelimit-remaining` afterwards, keeping the estimate inside `ingest` where
+  the pagination knowledge already is; or drop pre-reservation entirely and let
+  the budgeter gate on observed remaining quota, accepting that a single fan-out
+  can overshoot by a few calls. Decide in Phase 2, once `SeatsAeroSource` shows
+  what page counts actually look like.
 
 ## Rate-limit response headers (undocumented)
 

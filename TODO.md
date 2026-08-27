@@ -51,10 +51,29 @@ plan changes.
       - [x] `RouteQuery` record — `(Route, DateRange, Program)`. **No cabin:**
             sources return every cabin in one response, so a per-cabin query
             multiplies quota spend without narrowing the payload.
-      - [ ] `AvailabilitySource` interface. **Blocked on a decision:**
-            `ARCHITECTURE.md` §3 gives it `bulkByProgram(Program, Region)`, but
-            no `Region` type exists yet. Either model `Region` or drop the bulk
-            method until Phase 2 shows it is needed.
+      - [x] `Snapshot` record — `(RouteQuery, Instant fetchedAt, List<AvailabilityEntry>)`.
+            Carries the query so the `DateRange` actually fetched travels with the
+            result, which is what Phase 5 needs `intersection()` for. The
+            constructor rejects entries that do not belong to the query — wrong
+            route or program, date outside the range, `observedAt` after the fetch,
+            or a duplicate `AwardKey` — so a mapper bug is caught at the edge
+            rather than reaching the diff engine as inventory that moved.
+      - [x] `AvailabilitySourceException` — checked, built by the named factories
+            `retryable(query, msg)` and `permanent(query, msg)` rather than a
+            constructor taking a boolean. Carries the failed `RouteQuery` for the
+            layer that fans a Watch out into many queries.
+            - [ ] Add `serialVersionUID`. `Throwable` is `Serializable`, so javac
+                  warns and the JVM otherwise derives a value that changes whenever
+                  a factory is added. One line. While there: `query()` is documented
+                  "never null" but is `transient`, and deserialization bypasses the
+                  constructor — either soften the wording or accept it as moot.
+      - [x] `AvailabilitySource` interface — `Snapshot fetch(RouteQuery) throws
+            AvailabilitySourceException` plus `boolean supports(Program)`.
+            `bulkByProgram(Program, Region)` was **dropped**, not deferred: no
+            `Region` type was needed, and Phase 2 can add a bulk path if the
+            per-route fan-out proves too expensive. `estimatedCost(RouteQuery)`
+            was dropped too — see the open question in `docs/notes.md` about where
+            quota estimation lives now.
 - [ ] Domain unit tests — `src/test/java/com/awardwatch/domain/` is empty, and
       nothing currently asserts the invariants these records exist to enforce:
       - [ ] `AirportCode`: lower case canonicalizes, 2/4 letters and digits rejected.
@@ -63,6 +82,12 @@ plan changes.
             `dates()` includes `end`, `intersection()` is empty when disjoint.
       - [ ] `AvailabilityEntry`: negative miles/seats rejected, `refreshedAt` after
             `observedAt` rejected, `staleness()` empty when `refreshedAt` is null.
+      - [ ] `Snapshot`: entry on a different route/program rejected, entry outside
+            the queried `DateRange` rejected, duplicate `AwardKey` rejected,
+            `observedAt` after `fetchedAt` rejected. An **empty** entry list must
+            pass — that is the "asked, nothing available" case and the whole reason
+            failure throws instead. Also assert `entries` is unmodifiable and that
+            mutating the caller's list afterwards does not affect the Snapshot.
 - [ ] Docs housekeeping, now that the domain vocabulary has grown:
       - [ ] Write `docs/adr/0001-program-naming.md` — `ARCHITECTURE.md` §3 cites it
             and neither the file nor the `docs/adr/` directory exists.

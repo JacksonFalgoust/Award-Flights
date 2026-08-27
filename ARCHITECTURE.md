@@ -42,7 +42,7 @@ routes they care about.
                         │  │  SeatsAeroSource   │  │
                         │  └────────────────────┘  │
                         └────────────┬─────────────┘
-                                     │ normalized AvailabilityEntry
+                                     │ Snapshot of AvailabilityEntry
               ┌──────────────────────┼──────────────────────┐
               │                      │                      │
      ┌────────▼────────┐   ┌─────────▼────────┐   ┌─────────▼─────────┐
@@ -96,6 +96,10 @@ public record AvailabilityEntry(
 
 // One call's worth of work against an Availability Source.
 public record RouteQuery(Route route, DateRange departureDates, Program program) {}
+
+// Everything one source returned for one RouteQuery, taken as a single reading.
+// The unit the diff engine compares and the append-only history stores.
+public record Snapshot(RouteQuery query, Instant fetchedAt, List<AvailabilityEntry> entries) {}
 ```
 
 **Value types, not strings.** `AirportCode` and `Route` exist so that "this is a valid
@@ -219,6 +223,22 @@ where two different unrecognized programs collapse into one row and produce fals
 so it is a persisted identifier — renaming a constant is a data migration over
 append-only history, not a refactor. See `docs/adr/0001-program-naming.md`.
 
+**`AwardKey`.** The identity of the *award* an entry observed, stripped of the
+observation: `(departureDate, program, cabin, nonstop)`, nested inside
+`AvailabilityEntry`. It exists because the record's generated `equals` spans
+`mileageCost` and `observedAt`, which makes an award whose price moved unequal to
+itself and therefore useless for pairing one snapshot's entries against the last
+one's. Origin and destination are deliberately absent: a diff compares two snapshots
+of the same route, so they are constant across the comparison. Keys from different
+routes are not comparable, and collecting them into one map merges unrelated awards.
+This is the §6 diff key.
+
+`AvailabilityEntry.staleness()` returns `Optional<Duration>` — `observedAt -
+refreshedAt`, empty when the source reported no refresh time. Empty means *unknown*,
+never zero. The value is fixed for the life of the entry and does not grow as the row
+ages; "how old is this data right now" is a different quantity, computed against
+`observedAt` at request time by the layer that renders it.
+
 The key abstraction:
 
 ```java
@@ -227,15 +247,69 @@ The key abstraction:
 // implement it later without the rest of the app changing.
 public interface AvailabilitySource {
 
-    List<AvailabilityEntry> searchRoute(RouteQuery query);
+    // One query, one reading.
+    Snapshot fetch(RouteQuery query) throws AvailabilitySourceException;
 
-    List<AvailabilityEntry> bulkByProgram(Program program, Region region);
-
-    // How many API calls the source expects the above to consume, so the
-    // budgeter can reserve quota before the call is made.
-    int estimatedCost(RouteQuery query);
+    // Which mileage programs this source can price, so a registry can route a
+    // query to it. Answered from a constant; never calls upstream.
+    boolean supports(Program program);
 }
 ```
+
+**`fetch` returns a `Snapshot`, not a `List`.** The snapshot carries the `RouteQuery`
+that produced it, so the `DateRange` *actually fetched* travels with the result. That
+is what makes `DateRange.intersection` usable in §6: two snapshots taken over
+different windows can be diffed over the dates both covered. A bare list loses the
+distinction between "no award on 14 March" and "14 March was never fetched," and the
+diff engine reads the second as the first.
+
+The returned snapshot must carry the query it was given, unchanged. Nothing
+downstream can detect a substitution — `Snapshot` validates its entries against
+whatever query it holds, so a source that quietly narrows the range and reports the
+narrowed one produces a snapshot that is internally consistent and wrong. It then
+diffs over the intersection of the two ranges, the dropped dates simply leave the
+comparison, and inventory that was never checked reads as inventory that never
+changed. **A range that cannot be priced in full is a failure, not a smaller
+success.**
+
+**One query, one call, one `Snapshot`.** A source that cannot price a whole
+`DateRange` in a single upstream request fans it out internally and merges the
+responses. That is why `MAX_DAYS` is capped where it is, and why the cap is the
+implementation's problem rather than the caller's. `fetchedAt` stamps the reading as
+a whole; the entries' individual `observedAt` values legitimately spread across the
+duration of a fan-out.
+
+**Failure is an exception, never an empty result.** `AvailabilitySourceException` is
+checked, because an unchecked failure can be ignored by a caller who never considered
+it — and the shape of that mistake is a fetch loop that appends whatever it got back.
+An empty `entries` list is already a legitimate answer meaning *we asked and the
+source priced nothing*; a source that swallowed a 503 and returned one would fire
+**GONE** on inventory that never moved and write that fiction into append-only
+history, where nothing later can tell it from the truth.
+
+Instances come from named factories rather than a constructor —
+`AvailabilitySourceException.retryable(query, msg)` and `.permanent(query, msg)` —
+because the alternative is a boolean in an argument list, and getting that backwards
+means either hammering a rate-limited API forever or abandoning a route on a blip.
+The distinction is a claim about the *failure*, not a retry policy; how long to wait
+and when to give up belong to §5. The failed `RouteQuery` rides along on the
+exception, since the layer that fans a watch out into many queries collects failures
+with nothing else to attribute them to.
+
+**`supports(Program)` is the dispatch seam.** One source may cover many programs — an
+aggregator prices dozens, a scraper pointed at a single airline covers one — so a
+registry asks each source before routing a query. It is consulted once per query and
+must answer from what the implementation already knows; a source that reached the
+network here would turn dispatch into a second round of requests against the same
+quota the fetch has to live within. Calling `fetch` with an unsupported program is a
+`permanent` failure, named on the interface so two implementations cannot disagree
+about it.
+
+`Snapshot`'s own constructor rejects any entry that does not belong to the query it
+holds: wrong route, wrong program, a departure date outside the range, an
+`observedAt` after the fetch completed, or a duplicate `AwardKey`. A source's mapping
+bug is caught at the edge rather than reaching the diff engine disguised as inventory
+that moved.
 
 ### `ingest`
 
@@ -341,6 +415,17 @@ CREATE TABLE alert_event (
 );
 ```
 
+**Domain `Snapshot` vs. the `snapshot` table.** The record is
+`(query, fetchedAt, entries)`; the table flattens the query into
+`origin`/`destination`/`date_from`/`date_to`/`program`, maps `fetchedAt` onto
+`observed_at`, and adds three columns the domain deliberately has no field for.
+`api_calls_used` and `source` are ingest bookkeeping, not facts about the awards.
+`succeeded` is the interesting one: **there is no failed `Snapshot` in the domain**,
+because a source that cannot answer throws instead of constructing one. The `FALSE`
+row is written by `persistence` from the catch block, so the column records something
+the record could never hold — which is exactly why §6 can trust that a snapshot it
+loads is a real reading.
+
 **Retention.** Append-only growth is fine at personal scale (a few thousand
 rows/day), but add a monthly job that rolls snapshots older than 90 days into
 a daily aggregate and drops the raw entries.
@@ -395,10 +480,14 @@ For each active watch, after a new snapshot lands:
    a narrowed range as data would read every award on the dropped dates as **GONE**.
    `DateRange.intersection` returns empty when the two share no date at all, which
    means the pair cannot be diffed rather than that everything changed.
-3. Build a key for every surviving entry: `(departureDate, program, cabin, nonstop)`.
-   `nonstop` is part of the key because the nonstop and connecting awards in one
-   cabin are separately priced products. Without it the two collapse into one
-   row and a connection replacing a nonstop reads as a **CHEAPER** alert.
+3. Build an `AvailabilityEntry.AwardKey` for every surviving entry:
+   `(departureDate, program, cabin, nonstop)`. `nonstop` is part of the key because
+   the nonstop and connecting awards in one cabin are separately priced products.
+   Without it the two collapse into one row and a connection replacing a nonstop
+   reads as a **CHEAPER** alert. Indexing a snapshot by key is safe because
+   `Snapshot` already rejects duplicate keys at construction — otherwise a
+   duplicate would silently drop an entry and make the comparison depend on
+   iteration order.
 4. Classify:
    - key in new, absent from old → **NEW**
    - key in both, `mileageCost` dropped by more than a threshold → **CHEAPER**
@@ -465,7 +554,11 @@ cached snapshot is older than the TTL.
 
 - **A second `AvailabilitySource`.** The interface exists precisely so a direct
   airline crawler can be added without the domain, alerting, or API layers
-  knowing. Multiple sources would need a merge/dedup step in `ingest`.
+  knowing. `supports(Program)` is the seam: a registry routes each `RouteQuery` to
+  a source that claims its program, and a new source is a new bean rather than an
+  edit anywhere else. Two sources claiming the *same* program is the case that
+  needs real work — a merge/dedup step in `ingest`, and a precedence rule for
+  which reading wins when they disagree on price.
 - **Historical analysis.** The append-only table already supports asking which
   programs release seats on which weekdays, and how far out.
 - **Point valuation.** Join mileage cost against cash fare to rank redemptions
