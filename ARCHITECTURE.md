@@ -78,13 +78,104 @@ public record AvailabilityEntry(
         String destination,     // IATA, e.g. "NRT"
         LocalDate departureDate,
         Program program,        // AEROPLAN, UNITED, ...
-        Cabin cabin,            // Y, W, J, F
+        Cabin cabin,            // ECONOMY / PREMIUM_ECONOMY / BUSINESS / FIRST
         int mileageCost,        // miles required, one-way, per passenger
         int seatsRemaining,     // 0 means "shown but not bookable"
-        boolean directOnly,
-        Instant observedAt      // when we saw this, not when the API cached it
+        boolean nonstop,        // this award on a nonstop; connecting is its own entry
+        Instant observedAt,     // when we saw this, not when the source refreshed it
+        Instant refreshedAt     // when the source last refreshed it; null if unreported
 ) {}
 ```
+
+**`nonstop`, not `directOnly`.** "Only direct" is a constraint a caller imposes on
+a search — it belongs on `RouteQuery` and on `watch`, not on an observation. What
+this field records is a fact about the award itself: the itinerary has no
+connection. The distinction is not cosmetic, because seats.aero prices the two as
+separate products — `JDirectMileageCost` (nonstop) and `JMileageCost`
+(nonstop-or-connecting) can differ on the same record. One `AvailabilityEntry` is
+therefore one (cabin x nonstop) pair, which is why `nonstop` is part of the §6 diff
+key.
+
+**Two timestamps.** `observedAt` is when *we* pulled the data; `refreshedAt` is when
+the upstream source last re-crawled that route/date/program. Both are needed because
+`/search` and `/availability` are cache reads: their per-record `UpdatedAt` ages
+ranged from ~3 hours to ~5.75 days in the sample pull (`docs/notes.md`), so
+`observedAt` alone says nothing about how old the *inventory* is. Staleness is
+`observedAt - refreshedAt`, and `CONTEXT.md` requires it be surfaced rather than
+hidden.
+
+`refreshedAt` is nullable, and the null means precisely *the source did not report
+one* — never "assume fresh." Defaulting it to `observedAt` would compute a staleness
+of zero and claim perfect freshness for data of unknown age, the single worst
+default available for this field. `SeatsAeroSource` always has a real value to put
+here (`UpdatedAt` is documented always-present); a future live-query source may
+legitimately set it equal to `observedAt`, because there the data really is that
+fresh.
+
+**Cabin letters.** `Y` / `W` / `J` / `F` are IATA booking-class codes used as
+cabin shorthand: `Y` economy, `W` premium economy, `J` business, `F` first.
+(`W` is the odd one — historically a *discounted economy* fare bucket, but the
+industry, and seats.aero with it, settled on `W` as the premium-economy
+indicator.) seats.aero uses the letters as response field prefixes —
+`YAvailable`, `JMileageCost`, `FRemainingSeats` — and they are what
+`watch.cabins` and `availability_entry.cabin` store in §4.
+
+The enum constants are spelled out rather than named after the letters:
+
+```java
+public enum Cabin {
+    ECONOMY('Y'),
+    PREMIUM_ECONOMY('W'),
+    BUSINESS('J'),
+    FIRST('F');
+    // code() returns the IATA letter
+}
+```
+
+`Cabin.J` reads as nothing to anyone who isn't already fluent in fare codes,
+while the letter is still needed for field-prefix mapping and for the `CHAR(1)`
+column. The letter belongs in `domain` — it's industry nomenclature, not one
+vendor's. seats.aero's full-word query-param spelling (`cabin=economy` on
+`/availability`) *is* vendor-specific and stays in `SeatsAeroSource`.
+
+**Program naming.** seats.aero's concepts page lists each mileage partner with a
+`Source` column (`aeroplan`, `virginatlantic`) and a `Mileage Program` column
+("Air Canada Aeroplan", "Virgin Atlantic Flying Club"). These are not two
+concepts — the docs state that a source *is* a single mileage program — so
+`Program` models the one concept, and neither column dictates the constant names.
+
+The constants are named after the program's own brand, and the seats.aero slug is
+not on the enum:
+
+```java
+public enum Program {
+    AEROPLAN("Air Canada Aeroplan"),
+    AADVANTAGE("American Airlines AAdvantage"),
+    MILEAGE_PLAN("Alaska Mileage Plan"),
+    SKYMILES("Delta SkyMiles"),
+    FLYING_CLUB("Virgin Atlantic Flying Club");
+    // displayName() returns the human-readable program name
+}
+```
+
+Same rule as `Cabin`. `"virginatlantic"` as one lowercase token is seats.aero's
+spelling, not the industry's, so it is vendor-specific and lives in
+`SeatsAeroSource` beside the `cabin=economy` mapping — an `EnumMap<Program,String>`
+out and a `Map<String,Program>` back. A second `AvailabilitySource` would bring its
+own identifiers and has no claim on a privileged `code()` on the domain enum.
+
+Brand, not airline: seats.aero's slug is `delta`, but Delta the airline and
+SkyMiles the program are different things, and watches filter on the program.
+
+The reverse lookup returns `Optional<Program>`, and the mapper skips and logs slugs
+it doesn't recognize — seats.aero adds programs. There is deliberately no `UNKNOWN`
+constant: it would reach `availability_entry.program` and then the §6 diff key,
+where two different unrecognized programs collapse into one row and produce false
+`CHEAPER` alerts.
+
+`Program.name()` is what `availability_entry.program` and `watch.programs` store,
+so it is a persisted identifier — renaming a constant is a data migration over
+append-only history, not a refactor. See `docs/adr/0001-program-naming.md`.
 
 The key abstraction:
 
@@ -178,7 +269,8 @@ CREATE TABLE availability_entry (
     cabin           CHAR(1) NOT NULL,
     mileage_cost    INTEGER NOT NULL,
     seats_remaining SMALLINT NOT NULL,
-    direct_only     BOOLEAN NOT NULL
+    nonstop         BOOLEAN NOT NULL,
+    refreshed_at    TIMESTAMPTZ               -- source's own last-refresh; NULL = unreported
 );
 
 CREATE INDEX ON availability_entry (snapshot_id);
@@ -250,7 +342,10 @@ current state means re-emailing the same seat every hour until it's gone.
 For each active watch, after a new snapshot lands:
 
 1. Load the newest snapshot for the route, and the one before it.
-2. Build a key for every entry: `(departureDate, program, cabin)`.
+2. Build a key for every entry: `(departureDate, program, cabin, nonstop)`.
+   `nonstop` is part of the key because the nonstop and connecting awards in one
+   cabin are separately priced products. Without it the two collapse into one
+   row and a connection replacing a nonstop reads as a **CHEAPER** alert.
 3. Classify:
    - key in new, absent from old → **NEW**
    - key in both, `mileageCost` dropped by more than a threshold → **CHEAPER**

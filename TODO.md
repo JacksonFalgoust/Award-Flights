@@ -34,8 +34,12 @@ plan changes.
 - [x] Docker Compose with `postgres` and `redis` services for local dev.
 - [x] Package structure: `domain`, `ingest`, `persistence`, `alerting`, `api`.
 - [ ] Write the `domain` package with **no Spring imports**:
-      - [ ] `AvailabilityEntry` record
-      - [ ] `Program` and `Cabin` enums (Y / W / J / F)
+      - [x] `AvailabilityEntry` record
+      - [x] `Program` and `Cabin` enums. `Cabin` constants are spelled out —
+            `ECONOMY` / `PREMIUM_ECONOMY` / `BUSINESS` / `FIRST` — each carrying
+            its IATA letter (Y / W / J / F, seats.aero's field prefixes) via
+            `code()`. See `ARCHITECTURE.md` §3 for why, and note `W` means
+            premium economy, not discounted economy.
       - [ ] `RouteQuery` record
       - [ ] `AvailabilitySource` interface
 - [ ] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
@@ -91,7 +95,8 @@ plan changes.
 ## Phase 5 — Alerting
 
 - [ ] `DiffEngine.diff(previous, current)` → `List<AvailabilityChange>`.
-      - [ ] Key on `(departureDate, program, cabin)`.
+      - [ ] Key on `(departureDate, program, cabin, nonstop)` — the nonstop and
+            connecting awards in one cabin are separately priced products.
       - [ ] Classify NEW / CHEAPER / MORE_SEATS / GONE.
       - [ ] Unit tests, including: empty→populated, populated→empty,
             price drop, seat count change, identical snapshots (must yield zero).
