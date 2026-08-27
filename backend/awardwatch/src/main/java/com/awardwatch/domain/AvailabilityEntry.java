@@ -3,10 +3,8 @@ package com.awardwatch.domain;
 import java.time.LocalDate;
 import java.time.Instant;
 import java.util.Objects;
-import java.util.Locale;
 import java.time.Duration;
 import java.util.Optional;
-import java.util.regex.Pattern;
 
 /**
  * One Award, in one Cabin, on one Route and date, in one Mileage Program, as
@@ -17,12 +15,9 @@ import java.util.regex.Pattern;
  * construction, and no accessor here reads the wall clock.
  *
  * {@code (departureDate, program, cabin, nonstop)} identifies the award this entry
- * observed, and is the key the diff engine compares snapshots on.
+ * observed, and is the key the diff engine compares snapshots on. See {@link AwardKey}.
  *
- * @param origin         3-letter IATA code of the origin airport, e.g. {@code "ATL"};
- *                       canonicalized to upper case on construction
- * @param destination    3-letter IATA code of the destination airport, e.g. {@code "NRT"};
- *                       canonicalized to upper case on construction
+ * @param route          the directional origin/destination pair the award flies
  * @param departureDate  the local date of departure this award is priced for
  * @param program        the Mileage Program the award is priced in
  * @param cabin          the class of service the award is priced in
@@ -38,40 +33,29 @@ import java.util.regex.Pattern;
  *                       never substitute {@code observedAt}, which would claim the data is
  *                       perfectly fresh when its age is in fact unknown
  */
-
-public record AvailabilityEntry(String origin, String destination, LocalDate departureDate, Program program, Cabin cabin, int mileageCost, int seatsRemaining, boolean nonstop, Instant observedAt, Instant refreshedAt) {
-
-    private static final Pattern IATA = Pattern.compile("[A-Z]{3}");
+public record AvailabilityEntry(Route route, LocalDate departureDate, Program program, Cabin cabin, int mileageCost, int seatsRemaining, boolean nonstop, Instant observedAt, Instant refreshedAt) {
 
     /**
-     * Canonicalizes the airport codes and rejects any entry that could not have been
-     * observed, so that an invalid entry cannot exist to reach the diff engine or the
-     * append-only history.
+     * Rejects any entry that could not have been observed, so that an invalid entry cannot
+     * exist to reach the diff engine or the append-only history.
+     *
+     * Airport-code validity and the origin/destination distinctness rule are already
+     * guaranteed by {@link Route} and {@link AirportCode}; what remains here is the
+     * arithmetic and the relationship between the two timestamps.
      *
      * @throws NullPointerException     if any component other than {@code refreshedAt} is null
-     * @throws IllegalArgumentException if either airport code is not three letters, if the two
-     *                                  are the same airport, or if {@code mileageCost} or
-     *                                  {@code seatsRemaining} is negative
+     * @throws IllegalArgumentException if {@code mileageCost} or {@code seatsRemaining} is
+     *                                  negative, or if {@code refreshedAt} is after
+     *                                  {@code observedAt} &mdash; the source cannot have
+     *                                  refreshed data after we read it
      */
     public AvailabilityEntry {
 
-        Objects.requireNonNull(origin, "origin cannot be null");
-        Objects.requireNonNull(destination, "destination cannot be null");
+        Objects.requireNonNull(route, "route cannot be null");
         Objects.requireNonNull(departureDate, "departureDate cannot be null");
         Objects.requireNonNull(program, "program cannot be null");
         Objects.requireNonNull(cabin, "cabin cannot be null");
         Objects.requireNonNull(observedAt, "observedAt cannot be null");
-
-        origin = origin.toUpperCase(Locale.ROOT);
-        destination = destination.toUpperCase(Locale.ROOT);
-
-        if (!IATA.matcher(origin).matches()) {
-            throw new IllegalArgumentException("origin must be a 3-letter code");
-        }
-
-        if (!IATA.matcher(destination).matches()) {
-            throw new IllegalArgumentException("destination must be a 3-letter code");
-        }
 
         if (mileageCost < 0) {
             throw new IllegalArgumentException("mileageCost cannot be negative");
@@ -81,10 +65,6 @@ public record AvailabilityEntry(String origin, String destination, LocalDate dep
             throw new IllegalArgumentException("seatsRemaining cannot be negative");
         }
 
-        if (origin.equals(destination)) {
-            throw new IllegalArgumentException("origin and destination cannot be the same");
-        }
-    
         if (refreshedAt != null && refreshedAt.isAfter(observedAt)) {
             throw new IllegalArgumentException("refreshedAt cannot be after observedAt");
         }
@@ -108,22 +88,27 @@ public record AvailabilityEntry(String origin, String destination, LocalDate dep
             return Optional.of(Duration.between(refreshedAt, observedAt));
         }
     }
-    
+
     /**
      * The identity of the Award an entry observed, stripped of everything about the
      * observation itself.
      *
      * Two entries share an Award Key when they are two sightings of the same Award, so
-     * this &mdash; not {@link AvailabilityEntry} equality; is what pairs an entry in
+     * this &mdash; not {@link AvailabilityEntry} equality &mdash; is what pairs an entry in
      * one Snapshot with its predecessor in the last one. The record's own generated
      * {@code equals} spans every component including {@code mileageCost} and
      * {@code observedAt}, which makes an Award whose price moved unequal to itself and
      * useless for that pairing.
      *
-     * Scoped to one Route. Origin and destination are deliberately
-     * absent: a diff compares two Snapshots of the same Route, so they are constant across
-     * the comparison. Keys from different Routes are therefore not comparable, and
-     * collecting them into one map will merge unrelated Awards.
+     * Every one of the four components genuinely varies within a single Snapshot, because
+     * a {@link RouteQuery} pins only the Route and the Mileage Program: it spans a
+     * {@link DateRange} of departure dates, and a source returns all four Cabins and both
+     * the nonstop and connecting products in one response.
+     *
+     * Scoped to one Route. Origin and destination are deliberately absent: a diff compares
+     * two Snapshots of the same Route, so they are constant across the comparison. Keys
+     * from different Routes are therefore not comparable, and collecting them into one map
+     * will merge unrelated Awards.
      *
      * @param departureDate the local date of departure the Award is priced for
      * @param program       the Mileage Program the Award is priced in

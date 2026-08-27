@@ -72,10 +72,18 @@ Pure model classes and interfaces. No Spring annotations, no JPA, no HTTP.
 Everything else depends on this; it depends on nothing.
 
 ```java
+// A 3-letter IATA airport code. Canonicalized upper case; cannot be invalid.
+public record AirportCode(String value) {}
+
+// A directional origin/destination pair. ATL-NRT is not NRT-ATL.
+public record Route(AirportCode origin, AirportCode destination) {}
+
+// A closed span of departure dates, inclusive of both endpoints. Capped at 90 days.
+public record DateRange(LocalDate start, LocalDate end) {}
+
 // A single bookable award option at a point in time.
 public record AvailabilityEntry(
-        String origin,          // IATA, e.g. "ATL"
-        String destination,     // IATA, e.g. "NRT"
+        Route route,            // ATL-NRT, directional
         LocalDate departureDate,
         Program program,        // AEROPLAN, UNITED, ...
         Cabin cabin,            // ECONOMY / PREMIUM_ECONOMY / BUSINESS / FIRST
@@ -85,7 +93,41 @@ public record AvailabilityEntry(
         Instant observedAt,     // when we saw this, not when the source refreshed it
         Instant refreshedAt     // when the source last refreshed it; null if unreported
 ) {}
+
+// One call's worth of work against an Availability Source.
+public record RouteQuery(Route route, DateRange departureDates, Program program) {}
 ```
+
+**Value types, not strings.** `AirportCode` and `Route` exist so that "this is a valid
+airport code" and "origin differs from destination" are proved once, at construction,
+instead of re-checked by every record that holds a pair of strings. They were extracted
+after exactly that drift appeared: `AvailabilityEntry` rejected `ATL to ATL` and
+`RouteQuery` did not, because the check had been copy-pasted into one and not the other.
+
+Canonicalizing to upper case inside `AirportCode` is what makes `equals` a correct
+identity test, so `atl` from a query string and `ATL` from a source response compare
+equal. Nothing outside `AirportCode` may compare airport codes as raw strings.
+
+These stay out of `persistence` and `api`: the entities and DTOs in those layers hold
+`String`/`CHAR(3)` and convert at the mapping boundary they already have. No JPA
+`AttributeConverter` and no Jackson serializer is required, which is what keeps the
+`domain` package free of Spring.
+
+**`RouteQuery` carries a date range, not a single date, and no cabin.** A source returns
+every cabin for a given route/date/program in one response, so querying per cabin
+multiplies calls against a quota without narrowing the payload. Cabin is a dimension of
+the *result*: it lives on `AvailabilityEntry` and in the §6 diff key. `Program` is the
+opposite case and stays on the query, because it selects which source is called.
+
+`DateRange` is capped at `MAX_DAYS = 90`. Against a source that is not calendar-native, a
+range fans out into one upstream call per date, so an uncapped range is an uncapped burst
+at a rate-limited API — airlines publish ~330 days out, and a 330-call fan-out gets the
+key throttled or banned partway through. The cap turns that into a construction-time
+error at the edge of the system. A `watch` window longer than 90 days is therefore split
+into several `RouteQuery` objects by the scheduler.
+
+`DateRange.intersection` exists for §6: a diff must be scoped to the dates *both*
+snapshots actually covered, or a narrowed range reads as every award vanishing.
 
 **`nonstop`, not `directOnly`.** "Only direct" is a constraint a caller imposes on
 a search — it belongs on `RouteQuery` and on `watch`, not on an observation. What
@@ -151,7 +193,7 @@ not on the enum:
 public enum Program {
     AEROPLAN("Air Canada Aeroplan"),
     AADVANTAGE("American Airlines AAdvantage"),
-    MILEAGE_PLAN("Alaska Mileage Plan"),
+    ALASKA_MILEAGE_PLAN("Alaska Mileage Plan"),
     SKYMILES("Delta SkyMiles"),
     FLYING_CLUB("Virgin Atlantic Flying Club");
     // displayName() returns the human-readable program name
@@ -254,8 +296,12 @@ CREATE TABLE snapshot (
     id              BIGSERIAL PRIMARY KEY,
     origin          CHAR(3) NOT NULL,
     destination     CHAR(3) NOT NULL,
+    date_from       DATE NOT NULL,            -- the RouteQuery's DateRange, so a diff
+    date_to         DATE NOT NULL,            -- can be scoped to dates both snapshots saw
+    program         TEXT NOT NULL,            -- the RouteQuery's Program
     observed_at     TIMESTAMPTZ NOT NULL,
     api_calls_used  SMALLINT NOT NULL,
+    succeeded       BOOLEAN NOT NULL,         -- §6: a failed snapshot is never a baseline
     source          TEXT NOT NULL             -- 'seats.aero'
 );
 
@@ -274,7 +320,7 @@ CREATE TABLE availability_entry (
 );
 
 CREATE INDEX ON availability_entry (snapshot_id);
-CREATE INDEX ON snapshot (origin, destination, observed_at DESC);
+CREATE INDEX ON snapshot (origin, destination, program, observed_at DESC);
 
 -- Crawl bookkeeping: when each route was last fetched and how urgent it is.
 CREATE TABLE crawl_state (
@@ -341,20 +387,27 @@ current state means re-emailing the same seat every hour until it's gone.
 
 For each active watch, after a new snapshot lands:
 
-1. Load the newest snapshot for the route, and the one before it.
-2. Build a key for every entry: `(departureDate, program, cabin, nonstop)`.
+1. Load the two newest *successful* snapshots for the same `(route, program)`.
+   Snapshots for different programs are different fetches and never diff against
+   each other.
+2. Intersect the two snapshots' `[date_from, date_to]` spans and discard entries
+   outside the overlap. Only one snapshot's dates were never compared, and treating
+   a narrowed range as data would read every award on the dropped dates as **GONE**.
+   `DateRange.intersection` returns empty when the two share no date at all, which
+   means the pair cannot be diffed rather than that everything changed.
+3. Build a key for every surviving entry: `(departureDate, program, cabin, nonstop)`.
    `nonstop` is part of the key because the nonstop and connecting awards in one
    cabin are separately priced products. Without it the two collapse into one
    row and a connection replacing a nonstop reads as a **CHEAPER** alert.
-3. Classify:
+4. Classify:
    - key in new, absent from old → **NEW**
    - key in both, `mileageCost` dropped by more than a threshold → **CHEAPER**
    - key in both, `seatsRemaining` increased → **MORE_SEATS**
    - key in old, absent from new → **GONE** (recorded, not alerted)
-4. Filter by the watch's `cabins`, `programs`, `max_mileage`, `min_seats`.
-5. Suppress anything already in `alert_event` for this watch within a cooldown
+5. Filter by the watch's `cabins`, `programs`, `max_mileage`, `min_seats`.
+6. Suppress anything already in `alert_event` for this watch within a cooldown
    window (default 24h), so a seat that flickers in and out doesn't spam.
-6. Batch surviving changes into one email per watch per run.
+7. Batch surviving changes into one email per watch per run.
 
 **Edge case worth handling:** a snapshot that fails or returns empty because of
 an API error must not be treated as "everything disappeared" — and then, on the
@@ -385,7 +438,7 @@ cached snapshot is older than the TTL.
 
 | Concern | Choice | Why |
 |---|---|---|
-| Language / framework | Java 21, Spring Boot 3 | Existing strength; `@Scheduled` and Spring Data remove boilerplate |
+| Language / framework | Java 21, Spring Boot 4 | Existing strength; `@Scheduled` and Spring Data remove boilerplate |
 | Database | PostgreSQL | Array columns for `cabins`/`programs`, good time-series indexing |
 | Cache / counters | Redis | Atomic decrement for quota; TTL cache is free |
 | Migrations | Flyway | Schema in version control |

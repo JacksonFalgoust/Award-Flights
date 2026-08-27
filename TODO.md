@@ -40,8 +40,34 @@ plan changes.
             its IATA letter (Y / W / J / F, seats.aero's field prefixes) via
             `code()`. See `ARCHITECTURE.md` §3 for why, and note `W` means
             premium economy, not discounted economy.
-      - [ ] `RouteQuery` record
-      - [ ] `AvailabilitySource` interface
+      - [x] `AirportCode` and `Route` value types. Validation lives here once, not
+            copy-pasted into every record holding a pair of strings — which is
+            exactly how `RouteQuery` and `AvailabilityEntry` drifted apart on the
+            same-airport check. Keep them out of `persistence` and `api`: those
+            layers hold `String`/`CHAR(3)` and convert at their existing mapping
+            boundary, so no JPA converter or Jackson serializer is needed.
+      - [x] `DateRange` record, capped at `MAX_DAYS = 90`. `intersection()` is
+            what Phase 5 needs to scope a diff to dates both snapshots covered.
+      - [x] `RouteQuery` record — `(Route, DateRange, Program)`. **No cabin:**
+            sources return every cabin in one response, so a per-cabin query
+            multiplies quota spend without narrowing the payload.
+      - [ ] `AvailabilitySource` interface. **Blocked on a decision:**
+            `ARCHITECTURE.md` §3 gives it `bulkByProgram(Program, Region)`, but
+            no `Region` type exists yet. Either model `Region` or drop the bulk
+            method until Phase 2 shows it is needed.
+- [ ] Domain unit tests — `src/test/java/com/awardwatch/domain/` is empty, and
+      nothing currently asserts the invariants these records exist to enforce:
+      - [ ] `AirportCode`: lower case canonicalizes, 2/4 letters and digits rejected.
+      - [ ] `Route`: same-airport rejected; `ATL-NRT` does not equal `NRT-ATL`.
+      - [ ] `DateRange`: `single()` has length 1, exactly 90 days passes, 91 throws,
+            `dates()` includes `end`, `intersection()` is empty when disjoint.
+      - [ ] `AvailabilityEntry`: negative miles/seats rejected, `refreshedAt` after
+            `observedAt` rejected, `staleness()` empty when `refreshedAt` is null.
+- [ ] Docs housekeeping, now that the domain vocabulary has grown:
+      - [ ] Write `docs/adr/0001-program-naming.md` — `ARCHITECTURE.md` §3 cites it
+            and neither the file nor the `docs/adr/` directory exists.
+      - [ ] Add **Airport Code** and **Date Range** entries to `CONTEXT.md`. It
+            defines Route but not the two types Route is now built from.
 - [ ] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
       gets built and tested against this before real HTTP is involved.
 
@@ -65,12 +91,21 @@ plan changes.
 
 - [ ] Flyway migration V1: `app_user`, `watch`, `snapshot`, `availability_entry`,
       `crawl_state`, `alert_event`.
+      - [ ] `snapshot` carries `date_from`, `date_to`, `program` and `succeeded`
+            (ARCHITECTURE §4). The date span is not decoration: without it Phase 5
+            cannot intersect two snapshots' ranges, and a narrowed range reads as
+            every award on the dropped dates going **GONE**.
+      - [ ] Decide whether `crawl_state` still keys correctly on
+            `(origin, destination)` alone. It is now the only table with no program
+            or date dimension, while crawling is per `(route, program, date range)`.
 - [ ] JPA entities + Spring Data repositories.
 - [ ] `SnapshotService.record(route, entries, callsUsed)` — writes one snapshot
       plus its entries in a single transaction. **Append only; never update an
       entry in place.**
-- [ ] Repository method: newest two *successful* snapshots for a route.
-      The diff engine needs exactly this and nothing else.
+- [ ] Repository method: newest two *successful* snapshots for one
+      `(route, program)`. The diff engine needs exactly this and nothing else —
+      note it is keyed on program too, since snapshots for different programs are
+      different fetches and never diff against each other.
 - [ ] Integration test with Testcontainers (or a throwaway Compose DB).
 
 ---
@@ -84,6 +119,9 @@ plan changes.
             searches still work.
       - [ ] TTL on the key so old days expire on their own.
 - [ ] `@Scheduled` `CrawlScheduler` running every 5 minutes.
+      - [ ] Split a `watch` window longer than `DateRange.MAX_DAYS` (90) into
+            several `RouteQuery` objects. `DateRange` rejects a wider span at
+            construction, so an unsplit long watch is a hard failure, not a slow one.
 - [ ] Route scoring: `urgency * staleness * hitRate` (formula in ARCHITECTURE §5).
       - [ ] Unit test the scorer directly — it's pure logic, no excuse not to.
 - [ ] Redis response cache with 15-minute TTL, keyed by normalized query.
@@ -95,11 +133,17 @@ plan changes.
 ## Phase 5 — Alerting
 
 - [ ] `DiffEngine.diff(previous, current)` → `List<AvailabilityChange>`.
+      - [ ] Scope to `previous.dateRange().intersection(current.dateRange())` before
+            keying anything. Dates only one snapshot fetched were never compared,
+            and counting them reads a narrowed range as a mass **GONE**. An empty
+            intersection means the pair cannot be diffed at all — not that
+            everything changed.
       - [ ] Key on `(departureDate, program, cabin, nonstop)` — the nonstop and
             connecting awards in one cabin are separately priced products.
       - [ ] Classify NEW / CHEAPER / MORE_SEATS / GONE.
       - [ ] Unit tests, including: empty→populated, populated→empty,
-            price drop, seat count change, identical snapshots (must yield zero).
+            price drop, seat count change, identical snapshots (must yield zero),
+            and a narrowed date range (must yield zero, not a wave of **GONE**).
 - [ ] **Guard against the false-positive trap:** a failed or empty-because-of-error
       snapshot must never serve as a diff baseline. Flag failed snapshots and skip them.
 - [ ] Watch filtering: cabins, programs, `max_mileage`, `min_seats`.
