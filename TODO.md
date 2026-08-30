@@ -113,10 +113,10 @@ plan changes.
             nothing" promise in `package-info` was until now enforced by nothing.
             It reads sources by relative path, so it assumes the Gradle project is the
             working directory; swap it for ArchUnit if that ever bites.
-- [ ] Docs housekeeping, now that the domain vocabulary has grown:
-      - [ ] Write `docs/adr/0001-program-naming.md` — `ARCHITECTURE.md` §3 cites it
+- [x] Docs housekeeping, now that the domain vocabulary has grown:
+      - [x] Write `docs/adr/0001-program-naming.md` — `ARCHITECTURE.md` §3 cites it
             and neither the file nor the `docs/adr/` directory exists.
-      - [ ] Add **Airport Code** and **Date Range** entries to `CONTEXT.md`. It
+      - [x] Add **Airport Code** and **Date Range** entries to `CONTEXT.md`. It
             defines Route but not the two types Route is now built from.
 - [ ] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
       gets built and tested against this before real HTTP is involved. Its own tests

@@ -40,9 +40,19 @@ connecting one in the same Cabin on the same date, and separately priced — not
 filter over a single Award.
 _Avoid_: Direct, direct only, non-stop
 
+**Airport Code**:
+A 3-letter IATA airport identifier, canonicalized to upper case so a code compares
+equal regardless of how it was typed or returned. What a Route pairs, directionally,
+into an origin and a destination.
+_Avoid_: IATA code, airport, station
+
 **Route**:
 An origin and destination airport pair, directional. ATL→NRT is not NRT→ATL.
 _Avoid_: Trip, itinerary, leg, city pair
+
+**Date Range**:
+A closed span of departure dates, inclusive of both endpoints, capped at 90 days.
+_Avoid_: Window, date window, span, period
 
 **Snapshot**:
 One crawl of one Route — the set of Availability Entries seen together, so that a
