@@ -74,27 +74,57 @@ plan changes.
             per-route fan-out proves too expensive. `estimatedCost(RouteQuery)`
             was dropped too — see the open question in `docs/notes.md` about where
             quota estimation lives now.
-- [ ] Domain unit tests — `src/test/java/com/awardwatch/domain/` is empty, and
-      nothing currently asserts the invariants these records exist to enforce:
-      - [ ] `AirportCode`: lower case canonicalizes, 2/4 letters and digits rejected.
-      - [ ] `Route`: same-airport rejected; `ATL-NRT` does not equal `NRT-ATL`.
-      - [ ] `DateRange`: `single()` has length 1, exactly 90 days passes, 91 throws,
-            `dates()` includes `end`, `intersection()` is empty when disjoint.
-      - [ ] `AvailabilityEntry`: negative miles/seats rejected, `refreshedAt` after
-            `observedAt` rejected, `staleness()` empty when `refreshedAt` is null.
-      - [ ] `Snapshot`: entry on a different route/program rejected, entry outside
+- [x] Domain unit tests — 200 of them, in `src/test/java/com/awardwatch/domain/`.
+      Mutation-checked rather than assumed: breaking the duplicate-`AwardKey` guard,
+      the 90-day cap and the no-Spring rule each failed exactly the test meant to
+      catch it. Watch for assertions that build an AssertJ assert and never call a
+      terminal method — `assertThat(range.contains(d));` always passes.
+      - [x] `AirportCode`: lower case canonicalizes, 2/4 letters and digits rejected.
+            The Turkish-locale case earns its keep — a default-locale `toUpperCase`
+            turns `ist` into `İST`, which fails `[A-Z]{3}`.
+      - [x] `Route`: same-airport rejected, including across case; `ATL-NRT` does not
+            equal `NRT-ATL`.
+      - [x] `DateRange`: `single()` has length 1, exactly 90 days passes, 91 throws,
+            `dates()` includes `end`, `intersection()` is empty when disjoint — and a
+            one-day overlap is a length-1 range, not empty, which is the boundary
+            between "diffable" and "cannot be diffed at all".
+      - [x] `AvailabilityEntry`: negative miles/seats rejected, zero of either
+            accepted, `refreshedAt` after `observedAt` rejected, `staleness()` empty
+            when `refreshedAt` is null. `AwardKey` ignores price and seats — that is
+            what pairs an entry with its predecessor — and is deliberately blind to
+            route, which is only safe because a Snapshot spans exactly one Route.
+      - [x] `Snapshot`: entry on a different route/program rejected, entry outside
             the queried `DateRange` rejected, duplicate `AwardKey` rejected,
-            `observedAt` after `fetchedAt` rejected. An **empty** entry list must
-            pass — that is the "asked, nothing available" case and the whole reason
-            failure throws instead. Also assert `entries` is unmodifiable and that
-            mutating the caller's list afterwards does not affect the Snapshot.
+            `observedAt` after `fetchedAt` rejected. An **empty** entry list passes —
+            that is the "asked, nothing available" case and the whole reason failure
+            throws instead. `entries` is unmodifiable, and mutating the caller's list
+            afterwards does not affect the Snapshot. Entries differing only by cabin,
+            `nonstop` or departure date are accepted, so the duplicate check cannot
+            over-reject an ordinary multi-cabin response.
+      - [x] `RouteQuery`: null components rejected, value equality and `hashCode`
+            hold — Phase 4 uses it as the Redis cache key.
+      - [x] `Cabin` and `Program`: cabin letters are Y/W/J/F and distinct; every
+            program has a non-blank display name and no two are the same.
+      - [x] `AvailabilitySourceException`: each factory sets `retryable` the way its
+            name claims, the query and cause survive, and the class is **not** a
+            `RuntimeException` — the checked-ness is the entire argument for the type.
+      - [x] `DomainPackageTest`: scans the package's sources and fails on any
+            `org.springframework`, JPA, Jackson or Hibernate import. The "depends on
+            nothing" promise in `package-info` was until now enforced by nothing.
+            It reads sources by relative path, so it assumes the Gradle project is the
+            working directory; swap it for ArchUnit if that ever bites.
 - [ ] Docs housekeeping, now that the domain vocabulary has grown:
       - [ ] Write `docs/adr/0001-program-naming.md` — `ARCHITECTURE.md` §3 cites it
             and neither the file nor the `docs/adr/` directory exists.
       - [ ] Add **Airport Code** and **Date Range** entries to `CONTEXT.md`. It
             defines Route but not the two types Route is now built from.
 - [ ] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
-      gets built and tested against this before real HTTP is involved.
+      gets built and tested against this before real HTTP is involved. Its own tests
+      are the one Phase 1 test file still unwritten, and they pin the two halves of
+      the `AvailabilitySource` contract that the interface can only state in prose:
+      an unconfigured route returns an **empty** Snapshot rather than throwing, an
+      unsupported `Program` throws a **permanent** failure rather than returning
+      empty, and the Snapshot comes back carrying the query it was handed.
 
 ---
 
