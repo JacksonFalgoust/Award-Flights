@@ -118,7 +118,7 @@ plan changes.
             and neither the file nor the `docs/adr/` directory exists.
       - [x] Add **Airport Code** and **Date Range** entries to `CONTEXT.md`. It
             defines Route but not the two types Route is now built from.
-- [ ] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
+- [x] Add a `FakeAvailabilitySource` returning canned data. Everything downstream
       gets built and tested against this before real HTTP is involved. Its own tests
       are the one Phase 1 test file still unwritten, and they pin the two halves of
       the `AvailabilitySource` contract that the interface can only state in prose:
