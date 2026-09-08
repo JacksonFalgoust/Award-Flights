@@ -33,7 +33,7 @@ plan changes.
 - [x] `spring init` — Web, Data JPA, PostgreSQL, Validation, Mail, Redis, Flyway.
 - [x] Docker Compose with `postgres` and `redis` services for local dev.
 - [x] Package structure: `domain`, `ingest`, `persistence`, `alerting`, `api`.
-- [ ] Write the `domain` package with **no Spring imports**:
+- [x] Write the `domain` package with **no Spring imports**:
       - [x] `AvailabilityEntry` record
       - [x] `Program` and `Cabin` enums. `Cabin` constants are spelled out —
             `ECONOMY` / `PREMIUM_ECONOMY` / `BUSINESS` / `FIRST` — each carrying
@@ -62,7 +62,7 @@ plan changes.
             `retryable(query, msg)` and `permanent(query, msg)` rather than a
             constructor taking a boolean. Carries the failed `RouteQuery` for the
             layer that fans a Watch out into many queries.
-            - [ ] Add `serialVersionUID`. `Throwable` is `Serializable`, so javac
+            - [x] Add `serialVersionUID`. `Throwable` is `Serializable`, so javac
                   warns and the JVM otherwise derives a value that changes whenever
                   a factory is added. One line. While there: `query()` is documented
                   "never null" but is `transient`, and deserialization bypasses the

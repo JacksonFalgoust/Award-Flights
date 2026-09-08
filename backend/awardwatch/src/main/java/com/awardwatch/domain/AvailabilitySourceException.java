@@ -39,7 +39,7 @@ public class AvailabilitySourceException extends Exception {
      * log appender or remoting layer that does from failing on the attempt.
      */
     private final transient RouteQuery query;
-
+    private static final long serialVersionUID = 1L;
     private final boolean retryable;
 
     private AvailabilitySourceException(RouteQuery query, boolean retryable, String message, Throwable cause) {
