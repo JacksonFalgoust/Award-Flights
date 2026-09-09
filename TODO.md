@@ -130,7 +130,7 @@ plan changes.
 
 ## Phase 2 — Ingest
 
-- [ ] `SeatsAeroClient` using `RestClient`, `Partner-Authorization` header from config.
+- [x] `SeatsAeroClient` using `RestClient`, `Partner-Authorization` header from config.
 - [ ] `SeatsAeroSource implements AvailabilitySource` — mapping layer only.
 - [ ] Unit tests for the mapper using the Phase 0 saved JSON. Cover the ugly
       cases: null mileage, zero seats, mixed cabin, multi-segment.
