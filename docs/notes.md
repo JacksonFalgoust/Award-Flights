@@ -213,6 +213,28 @@ want to spend a burst of calls specifically to capture this — flag if so
 and it can be done deliberately rather than as a side effect of something
 else.
 
+## Live mapper verification (2026-09-15)
+
+Verified `SeatsAeroSource` end to end against the Partner API and compared the
+same cached result with the seats.aero website. The query was JFK → LHR on
+2026-10-07 using American AAdvantage. The API returned HTTP 200, and the source
+successfully parsed it into a `Snapshot`.
+
+The website and mapped snapshot agreed on the visible award dimensions:
+
+- nonstop economy: 30,000 miles
+- nonstop premium economy: 40,000 miles
+- connecting economy: 30,000 miles
+- connecting business: 57,500 miles
+- connecting first: 85,000 miles
+
+The website's trip-detail view also showed the same direct economy itineraries
+and prices present in `AvailabilityTrips`, including BA178 and AA142 at 30,000
+miles. The API reported `RemainingSeats: 0` for these visible awards; the
+website did not display a seat count, so the mapper's deliberate preservation
+of zero was verified against the payload but could not be compared as a
+user-visible field. No mapper discrepancy was found.
+
 ## Open items from Phase 0 checklist
 
 - What a rate-limit (429) response actually looks like — see above; needs a

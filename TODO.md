@@ -137,7 +137,7 @@ plan changes.
 - [x] Error handling: distinguish 401 (bad key), 429 (rate limit), 5xx (retry),
       and map each to a typed exception. Don't let a 429 look like "no seats."
 - [x] Retry with exponential backoff on 429/5xx only.
-- [ ] Verify against the live API and compare one result by hand with the
+- [x] Verify against the live API and compare one result by hand with the
       seats.aero website. If they disagree, the mapper is wrong.
 
 ---
