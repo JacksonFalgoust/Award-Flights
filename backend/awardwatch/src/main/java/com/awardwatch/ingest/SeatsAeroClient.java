@@ -30,6 +30,7 @@ public class SeatsAeroClient {
                     .queryParam("sources", request.sourceSlug())
                     .queryParam("take", 1000)
                     .queryParam("skip", request.skip())
+                    .queryParam("include_trips", request.includeTrips())
                     .queryParamIfPresent("cursor", Optional.ofNullable(request.cursor()))
                     .build())
                 .retrieve()

@@ -61,6 +61,7 @@ class SeatsAeroClientTest {
                                 + "&sources=american"
                                 + "&take=1000"
                                 + "&skip=0"
+                                + "&include_trips=true"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))
@@ -93,6 +94,7 @@ class SeatsAeroClientTest {
                                 + "&sources=american"
                                 + "&take=1000"
                                 + "&skip=1000"
+                                + "&include_trips=true"
                                 + "&cursor=1689009958"
                 ))
                 .andExpect(method(HttpMethod.GET))
@@ -116,6 +118,38 @@ class SeatsAeroClientTest {
     }
 
     @Test
+    void searchCanExcludeTripDetails() {
+        server.expect(requestTo(
+                        BASE_URL
+                                + "search?origin_airport=ATL"
+                                + "&destination_airport=NRT"
+                                + "&start_date=2026-10-01"
+                                + "&end_date=2026-10-07"
+                                + "&sources=american"
+                                + "&take=1000"
+                                + "&skip=0"
+                                + "&include_trips=false"
+                ))
+                .andExpect(method(HttpMethod.GET))
+                .andExpect(header("Partner-Authorization", FAKE_API_KEY))
+                .andRespond(withSuccess(EMPTY_RESPONSE, MediaType.APPLICATION_JSON));
+
+        SeatsAeroSearchRequest request = new SeatsAeroSearchRequest(
+                "ATL",
+                "NRT",
+                LocalDate.of(2026, 10, 1),
+                LocalDate.of(2026, 10, 7),
+                "american",
+                0,
+                false,
+                null
+        );
+
+        assertThat(client.search(request)).isEqualTo(EMPTY_RESPONSE);
+        server.verify();
+    }
+
+    @Test
     void nullRequestIsRejectedBeforeSendingAnything() {
         assertThatThrownBy(() -> client.search(null))
                 .isInstanceOf(NullPointerException.class)
@@ -135,6 +169,7 @@ class SeatsAeroClientTest {
                                 + "&sources=american"
                                 + "&take=1000"
                                 + "&skip=0"
+                                + "&include_trips=true"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))
@@ -187,6 +222,7 @@ class SeatsAeroClientTest {
                                 + "&sources=american"
                                 + "&take=1000"
                                 + "&skip=0"
+                                + "&include_trips=true"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))

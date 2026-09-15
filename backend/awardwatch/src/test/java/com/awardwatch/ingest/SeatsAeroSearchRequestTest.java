@@ -31,7 +31,24 @@ class SeatsAeroSearchRequestTest {
         assertThat(request.endDate()).isEqualTo(END);
         assertThat(request.sourceSlug()).isEqualTo("american");
         assertThat(request.skip()).isEqualTo(1_000);
+        assertThat(request.includeTrips()).isTrue();
         assertThat(request.cursor()).isEqualTo(1_689_009_958L);
+    }
+
+    @Test
+    void tripDetailsCanBeDisabledExplicitly() {
+        SeatsAeroSearchRequest request = new SeatsAeroSearchRequest(
+                "ATL",
+                "NRT",
+                START,
+                END,
+                "american",
+                0,
+                false,
+                null
+        );
+
+        assertThat(request.includeTrips()).isFalse();
     }
 
     @Test

@@ -10,8 +10,31 @@ public record SeatsAeroSearchRequest(
         LocalDate endDate,
         String sourceSlug,
         int skip,
+        boolean includeTrips,
         Long cursor
 ) {
+
+    public SeatsAeroSearchRequest(
+            String originAirport,
+            String destinationAirport,
+            LocalDate startDate,
+            LocalDate endDate,
+            String sourceSlug,
+            int skip,
+            Long cursor
+    ) {
+        this(
+            originAirport,
+            destinationAirport,
+            startDate,
+            endDate,
+            sourceSlug,
+            skip,
+            true,
+            cursor
+        );
+    }
+
     public SeatsAeroSearchRequest {
         Objects.requireNonNull(originAirport, "originAirport cannot be null");
         Objects.requireNonNull(destinationAirport, "destinationAirport cannot be null");
