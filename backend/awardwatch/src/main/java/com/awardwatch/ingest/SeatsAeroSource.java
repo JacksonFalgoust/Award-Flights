@@ -10,6 +10,7 @@ import com.awardwatch.domain.RouteQuery;
 import com.awardwatch.domain.Snapshot;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,6 +30,7 @@ import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -39,7 +41,10 @@ public final class SeatsAeroSource implements AvailabilitySource {
     private final SeatsAeroClient client;
     private final ObjectMapper objectMapper;
     private final Clock clock;
+    private final Sleeper sleeper;
 
+    static final int MAX_ATTEMPTS = 3;
+    static final Duration INITIAL_RETRY_DELAY = Duration.ofSeconds(1);
     private static final Map<Program, String> PROGRAM_TO_SOURCE_SLUG = createProgramToSourceSlug();
     private static final Map<String, Program> SOURCE_SLUG_TO_PROGRAM = reverse(PROGRAM_TO_SOURCE_SLUG);
     private static final Map<Cabin, String> CABIN_TO_VENDOR_NAME = createCabinToVendorName();
@@ -54,14 +59,30 @@ public final class SeatsAeroSource implements AvailabilitySource {
             .thenComparing(AwardCandidate::vendorId);
     private static final Logger LOGGER = LoggerFactory.getLogger(SeatsAeroSource.class);
 
+    @Autowired
     public SeatsAeroSource(
         SeatsAeroClient client,
         ObjectMapper objectMapper,
         Clock clock
     ) {
+        this(client, objectMapper, clock, Thread::sleep);
+    }
+
+    SeatsAeroSource(
+        SeatsAeroClient client,
+        ObjectMapper objectMapper,
+        Clock clock,
+        Sleeper sleeper
+    ) {
         this.client = Objects.requireNonNull(client, "client cannot be null");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper cannot be null");
         this.clock = Objects.requireNonNull(clock, "clock cannot be null");
+        this.sleeper = Objects.requireNonNull(sleeper, "sleeper cannot be null");
+    }
+
+    @FunctionalInterface
+    interface Sleeper {
+        void sleep(Duration duration) throws InterruptedException;
     }
 
     record ObservedAvailability(
@@ -681,47 +702,97 @@ public final class SeatsAeroSource implements AvailabilitySource {
         RouteQuery query,
         SeatsAeroSearchRequest request
     ) throws AvailabilitySourceException {
+        Duration retryDelay = INITIAL_RETRY_DELAY;
+        int attempt = 1;
+
+        while (true) {
+            try {
+                return client.search(request);
+            } catch (RestClientResponseException exception) {
+                if (isRetryableHttpStatus(exception) && attempt < MAX_ATTEMPTS) {
+                    waitBeforeRetry(query, exception, attempt, retryDelay);
+                    retryDelay = retryDelay.multipliedBy(2);
+                    attempt++;
+                    continue;
+                }
+
+                throw mapResponseFailure(query, exception);
+            } catch (RestClientException exception) {
+                throw AvailabilitySourceException.retryable(
+                    query,
+                    "Seats.aero request failed before a response was received",
+                    exception
+                );
+            }
+        }
+    }
+
+    private boolean isRetryableHttpStatus(RestClientResponseException exception) {
+        return exception.getStatusCode().value() == 429
+            || exception.getStatusCode().is5xxServerError();
+    }
+
+    private void waitBeforeRetry(
+        RouteQuery query,
+        RestClientResponseException responseFailure,
+        int attempt,
+        Duration retryDelay
+    ) throws AvailabilitySourceException {
+        LOGGER.warn(
+            "Seats.aero returned HTTP {}; retrying after {} (attempt {} of {})",
+            responseFailure.getStatusCode().value(),
+            retryDelay,
+            attempt + 1,
+            MAX_ATTEMPTS
+        );
+
         try {
-            return client.search(request);
-        } catch (RestClientResponseException exception) {
-            int statusCode = exception.getStatusCode().value();
-
-            if (statusCode == 401) {
-                throw AvailabilitySourceException.permanent(
-                    query,
-                    "Seats.aero rejected the API credentials (HTTP 401)",
-                    exception
-                );
-            }
-
-            if (statusCode == 429) {
-                throw AvailabilitySourceException.retryable(
-                    query,
-                    "Seats.aero rate limit exceeded (HTTP 429)",
-                    exception
-                );
-            }
-
-            if (exception.getStatusCode().is5xxServerError()) {
-                throw AvailabilitySourceException.retryable(
-                    query,
-                    "Seats.aero server error (HTTP " + statusCode + ")",
-                    exception
-                );
-            }
-
-            throw AvailabilitySourceException.permanent(
-                query,
-                "Seats.aero rejected the request (HTTP " + statusCode + ")",
-                exception
-            );
-        } catch (RestClientException exception) {
+            sleeper.sleep(retryDelay);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
             throw AvailabilitySourceException.retryable(
                 query,
-                "Seats.aero request failed before a response was received",
+                "Interrupted while waiting to retry Seats.aero",
                 exception
             );
         }
+    }
+
+    private AvailabilitySourceException mapResponseFailure(
+        RouteQuery query,
+        RestClientResponseException exception
+    ) {
+        int statusCode = exception.getStatusCode().value();
+
+        if (statusCode == 401) {
+            return AvailabilitySourceException.permanent(
+                query,
+                "Seats.aero rejected the API credentials (HTTP 401)",
+                exception
+            );
+        }
+
+        if (statusCode == 429) {
+            return AvailabilitySourceException.retryable(
+                query,
+                "Seats.aero rate limit exceeded (HTTP 429)",
+                exception
+            );
+        }
+
+        if (exception.getStatusCode().is5xxServerError()) {
+            return AvailabilitySourceException.retryable(
+                query,
+                "Seats.aero server error (HTTP " + statusCode + ")",
+                exception
+            );
+        }
+
+        return AvailabilitySourceException.permanent(
+            query,
+            "Seats.aero rejected the request (HTTP " + statusCode + ")",
+            exception
+        );
     }
 
     List<ObservedAvailability> validateAvailabilities(

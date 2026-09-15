@@ -8,13 +8,15 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -236,6 +238,9 @@ class SeatsAeroSourceTest {
         assertThatThrownBy(() -> new SeatsAeroSource(client, objectMapper, null))
             .isInstanceOf(NullPointerException.class)
             .hasMessage("clock cannot be null");
+        assertThatThrownBy(() -> new SeatsAeroSource(client, objectMapper, clock, null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("sleeper cannot be null");
     }
 
     @Test 
@@ -1273,11 +1278,19 @@ class SeatsAeroSourceTest {
                     assertThat(exception).hasCause(cause);
                 }
             );
+
+        verify(client, times(1)).search(any());
     }
 
     @Test
-    void rateLimitedResponseIsARetryableFailure() {
-        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+    void rateLimitedResponseRetriesWithExponentialBackoffThenFails() {
+        List<Duration> delays = new ArrayList<>();
+        SeatsAeroSource source = new SeatsAeroSource(
+            client,
+            objectMapper,
+            clock,
+            delays::add
+        );
         RouteQuery query = query();
         RestClientResponseException cause = responseFailure(HttpStatus.TOO_MANY_REQUESTS);
         when(client.search(any())).thenThrow(cause);
@@ -1292,25 +1305,39 @@ class SeatsAeroSourceTest {
                     assertThat(exception).hasCause(cause);
                 }
             );
+
+        verify(client, times(SeatsAeroSource.MAX_ATTEMPTS)).search(any());
+        assertThat(delays).containsExactly(
+            SeatsAeroSource.INITIAL_RETRY_DELAY,
+            SeatsAeroSource.INITIAL_RETRY_DELAY.multipliedBy(2)
+        );
     }
 
     @Test
-    void serverErrorResponseIsARetryableFailure() {
-        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+    void serverErrorRetriesWithExponentialBackoffAndCanRecover()
+        throws AvailabilitySourceException {
+        List<Duration> delays = new ArrayList<>();
+        SeatsAeroSource source = new SeatsAeroSource(
+            client,
+            objectMapper,
+            clock,
+            delays::add
+        );
         RouteQuery query = query();
         RestClientResponseException cause = responseFailure(HttpStatus.SERVICE_UNAVAILABLE);
-        when(client.search(any())).thenThrow(cause);
+        when(client.search(any()))
+            .thenThrow(cause)
+            .thenThrow(cause)
+            .thenReturn(page(false, null));
 
-        assertThatThrownBy(() -> source.fetch(query))
-            .isInstanceOfSatisfying(
-                AvailabilitySourceException.class,
-                exception -> {
-                    assertThat(exception.retryable()).isTrue();
-                    assertThat(exception.query()).isSameAs(query);
-                    assertThat(exception).hasMessageContaining("HTTP 503");
-                    assertThat(exception).hasCause(cause);
-                }
-            );
+        Snapshot snapshot = source.fetch(query);
+
+        assertThat(snapshot.entries()).isEmpty();
+        verify(client, times(SeatsAeroSource.MAX_ATTEMPTS)).search(any());
+        assertThat(delays).containsExactly(
+            SeatsAeroSource.INITIAL_RETRY_DELAY,
+            SeatsAeroSource.INITIAL_RETRY_DELAY.multipliedBy(2)
+        );
     }
 
     @Test
@@ -1330,6 +1357,8 @@ class SeatsAeroSourceTest {
                     assertThat(exception).hasCause(cause);
                 }
             );
+
+        verify(client, times(1)).search(any());
     }
 
     @Test
@@ -1349,6 +1378,8 @@ class SeatsAeroSourceTest {
                     assertThat(exception).hasCause(cause);
                 }
             );
+
+        verify(client, times(1)).search(any());
     }
 
     @Test
