@@ -134,7 +134,7 @@ plan changes.
 - [x] `SeatsAeroSource implements AvailabilitySource` — mapping layer only.
 - [x] Unit tests for the mapper using the Phase 0 saved JSON. Cover the ugly
       cases: null mileage, zero seats, mixed cabin, multi-segment.
-- [ ] Error handling: distinguish 401 (bad key), 429 (rate limit), 5xx (retry),
+- [x] Error handling: distinguish 401 (bad key), 429 (rate limit), 5xx (retry),
       and map each to a typed exception. Don't let a 429 look like "no seats."
 - [ ] Retry with exponential backoff on 429/5xx only.
 - [ ] Verify against the live API and compare one result by hand with the

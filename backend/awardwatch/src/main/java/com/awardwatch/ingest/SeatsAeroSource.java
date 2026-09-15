@@ -30,6 +30,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 
 @Component
 public final class SeatsAeroSource implements AvailabilitySource {
@@ -626,7 +628,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
         Long paginationCursor = null;
 
         while (true) {
-            String responseBody = client.search(request);
+            String responseBody = search(query, request);
             Instant observedAt = clock.instant();
 
             SeatsAeroSearchResponse response = parseSearchResponse(query, responseBody);
@@ -673,6 +675,53 @@ public final class SeatsAeroSource implements AvailabilitySource {
         }
 
         return List.copyOf(availabilityById.values());
+    }
+
+    private String search(
+        RouteQuery query,
+        SeatsAeroSearchRequest request
+    ) throws AvailabilitySourceException {
+        try {
+            return client.search(request);
+        } catch (RestClientResponseException exception) {
+            int statusCode = exception.getStatusCode().value();
+
+            if (statusCode == 401) {
+                throw AvailabilitySourceException.permanent(
+                    query,
+                    "Seats.aero rejected the API credentials (HTTP 401)",
+                    exception
+                );
+            }
+
+            if (statusCode == 429) {
+                throw AvailabilitySourceException.retryable(
+                    query,
+                    "Seats.aero rate limit exceeded (HTTP 429)",
+                    exception
+                );
+            }
+
+            if (exception.getStatusCode().is5xxServerError()) {
+                throw AvailabilitySourceException.retryable(
+                    query,
+                    "Seats.aero server error (HTTP " + statusCode + ")",
+                    exception
+                );
+            }
+
+            throw AvailabilitySourceException.permanent(
+                query,
+                "Seats.aero rejected the request (HTTP " + statusCode + ")",
+                exception
+            );
+        } catch (RestClientException exception) {
+            throw AvailabilitySourceException.retryable(
+                query,
+                "Seats.aero request failed before a response was received",
+                exception
+            );
+        }
     }
 
     List<ObservedAvailability> validateAvailabilities(

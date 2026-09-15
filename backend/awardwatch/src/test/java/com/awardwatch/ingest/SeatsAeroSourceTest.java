@@ -14,12 +14,17 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -1252,6 +1257,101 @@ class SeatsAeroSourceTest {
     }
 
     @Test
+    void unauthorizedResponseIsAPermanentFailure() {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        RouteQuery query = query();
+        RestClientResponseException cause = responseFailure(HttpStatus.UNAUTHORIZED);
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> {
+                    assertThat(exception.retryable()).isFalse();
+                    assertThat(exception.query()).isSameAs(query);
+                    assertThat(exception).hasMessageContaining("HTTP 401");
+                    assertThat(exception).hasCause(cause);
+                }
+            );
+    }
+
+    @Test
+    void rateLimitedResponseIsARetryableFailure() {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        RouteQuery query = query();
+        RestClientResponseException cause = responseFailure(HttpStatus.TOO_MANY_REQUESTS);
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> {
+                    assertThat(exception.retryable()).isTrue();
+                    assertThat(exception.query()).isSameAs(query);
+                    assertThat(exception).hasMessageContaining("HTTP 429");
+                    assertThat(exception).hasCause(cause);
+                }
+            );
+    }
+
+    @Test
+    void serverErrorResponseIsARetryableFailure() {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        RouteQuery query = query();
+        RestClientResponseException cause = responseFailure(HttpStatus.SERVICE_UNAVAILABLE);
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> {
+                    assertThat(exception.retryable()).isTrue();
+                    assertThat(exception.query()).isSameAs(query);
+                    assertThat(exception).hasMessageContaining("HTTP 503");
+                    assertThat(exception).hasCause(cause);
+                }
+            );
+    }
+
+    @Test
+    void otherClientErrorResponseIsAPermanentFailure() {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        RouteQuery query = query();
+        RestClientResponseException cause = responseFailure(HttpStatus.BAD_REQUEST);
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> {
+                    assertThat(exception.retryable()).isFalse();
+                    assertThat(exception.query()).isSameAs(query);
+                    assertThat(exception).hasMessageContaining("HTTP 400");
+                    assertThat(exception).hasCause(cause);
+                }
+            );
+    }
+
+    @Test
+    void transportFailureIsRetryable() {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        RouteQuery query = query();
+        ResourceAccessException cause = new ResourceAccessException("connection reset");
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> {
+                    assertThat(exception.retryable()).isTrue();
+                    assertThat(exception.query()).isSameAs(query);
+                    assertThat(exception).hasMessageContaining("before a response");
+                    assertThat(exception).hasCause(cause);
+                }
+            );
+    }
+
+    @Test
     void fetchRejectsNullQueryBeforeCallingClient() {
         SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
 
@@ -1284,6 +1384,17 @@ class SeatsAeroSourceTest {
                 refreshedAt
             ),
             vendorId
+        );
+    }
+
+    private RestClientResponseException responseFailure(HttpStatus status) {
+        return new RestClientResponseException(
+            status.getReasonPhrase(),
+            status,
+            status.getReasonPhrase(),
+            HttpHeaders.EMPTY,
+            new byte[0],
+            StandardCharsets.UTF_8
         );
     }
 }
