@@ -153,7 +153,7 @@ plan changes.
       - [x] Key `crawl_state` by
             `(origin, destination, program, date_from, date_to)`, matching the full
             identity of the `RouteQuery` being scheduled.
-- [ ] JPA entities + Spring Data repositories.
+- [x] JPA entities + Spring Data repositories.
 - [ ] `SnapshotService.record(route, entries, callsUsed)` — writes one snapshot
       plus its entries in a single transaction. **Append only; never update an
       entry in place.**
