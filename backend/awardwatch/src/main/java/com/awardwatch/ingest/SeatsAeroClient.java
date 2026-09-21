@@ -9,6 +9,8 @@ import java.util.Optional;
 
 @Component
 public class SeatsAeroClient {
+    private static final int MIN_CABIN_PERCENTAGE = 0;
+
     private final RestClient restClient;
 
     public SeatsAeroClient(
@@ -31,6 +33,7 @@ public class SeatsAeroClient {
                     .queryParam("take", 1000)
                     .queryParam("skip", request.skip())
                     .queryParam("include_trips", request.includeTrips())
+                    .queryParam("min_cabin_pct", MIN_CABIN_PERCENTAGE)
                     .queryParamIfPresent("cursor", Optional.ofNullable(request.cursor()))
                     .build())
                 .retrieve()

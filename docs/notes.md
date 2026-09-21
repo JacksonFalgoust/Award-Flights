@@ -69,14 +69,11 @@ before relying on it for quota-key derivation.
 
 ## Caveat on the saved samples
 
-`searchEndpointSampleResponse.json` is **not a genuine live capture** — its
-records (SFO→JFK American, SFO→LHR Virgin Atlantic, `CreatedAt` ~2022-12,
-`UpdatedAt` ~2023-07) exactly match the canned example payload published on
-the `/reference/cached-search` docs page, right down to the record IDs
-(`2QSaUXJ0ZuSVqgrRWqkSlXhnVbS`, `2IzwzHKFl5zkDTwHedjfDL3aOwG`). It looks like
-the docs' example was saved instead of a real curl response. Treat
-field-shape conclusions from it as reliable (the schema is real) but treat
-"current" data (dates, staleness) from it as not representative.
+`searchEndpointSampleResponse.json` is a live cached-search capture for
+LAX→HND on 2026-12-12 using Alaska Mileage Plan. It contains one Availability
+object (updated 2026-09-09) and 12 `AvailabilityTrips` because the request used
+`include_trips=true`. Its timestamps are representative of the cache at capture
+time, but naturally should not be treated as current availability later.
 
 `availabilityEndpointSampleResponse.json` **is genuine** — its `moreURL`
 carries real query params (`source=delta`, `origin_region=North+America`,
@@ -88,29 +85,27 @@ actual live pull.
 
 **`/search` (cached search) response, per entry in `data[]`:**
 
-Always present, never null: `ID`, `RouteID`, `Route` (see below), `Date`,
-`ParsedDate`, `Source`, `CreatedAt`, `UpdatedAt`, and the `Y*`/`W*`/`J*`
-group (`YAvailable`, `YMileageCost`, `YRemainingSeats`, `YAirlines`,
-`YDirect`, and the `W` equivalents) — every record in the sample had
-economy and premium economy fields populated, even when unavailable (then
-`Available: false`, cost `"0"`, `RemainingSeats: 0`, `Airlines: ""`).
+Present in this capture: `ID`, `RouteID`, `Route` (see below), `Date`,
+`ParsedDate`, `Source`, `CreatedAt`, `UpdatedAt`, and the `Y*`/`W*`/`J*`/`F*`
+summary groups. One capture cannot establish that fields are always present;
+the DTO and mapper must continue to handle documented nullable fields.
 
-Sometimes null, **as a group**: the `F*` fields (`FAvailable`,
-`FMileageCost`, `FRemainingSeats`, `FAirlines`, `FDirect`) were null on
-100% of `virginatlantic` records (6/6) and non-null on every `american`,
-`alaska`, and `delta` record. `J*` was never null in this sample, but the
-same mechanism presumably applies to any cabin a given program's fare chart
-doesn't define — **null means "this program has no such cabin," not
-"nothing available."** `false` + zero cost means the cabin exists but has
-no bookable award space on that date. The mapper needs to keep these
-distinct rather than collapsing null to false.
+In this response, unavailable cabin summaries use `Available: false`, zero
+cost, and zero remaining seats. A null summary field may mean a program does
+not expose that cabin or field; it must not be treated as positive
+availability. A zero seat count on an available award has different semantics:
+Seats.aero documents that several programs use zero when the count is unknown.
+The mapper therefore stores that count as unknown rather than claiming the
+award is sold out.
 
-`AvailabilityTrips` is always `null` in the `/search` sample — trip-level
-detail isn't returned unless requested (see `include_trips` param).
+`AvailabilityTrips` contains 12 records in this sample. Trip-level detail is
+only returned when requested with `include_trips=true`; mixed-cabin trips also
+require a suitable `min_cabin_pct` threshold.
 
-**`Route` sub-object**, `/search`: `ID`, `OriginAirport`, `OriginRegion`,
-`DestinationAirport`, `DestinationRegion`, `Distance`, `Source`,
-**and `NumDaysOut`**. All non-null in the sample.
+**`Route` sub-object**, `/search`: this capture contains `ID`, `OriginAirport`,
+`OriginRegion`, `DestinationAirport`, `DestinationRegion`, `Distance`, and
+`Source`. It does not contain `NumDaysOut`; consumers must not require that
+field.
 
 **`/availability` (bulk) response** is a materially richer shape than
 `/search` — same base fields plus, per cabin (`Y`/`W`/`J`/`F`):
@@ -230,10 +225,11 @@ The website and mapped snapshot agreed on the visible award dimensions:
 
 The website's trip-detail view also showed the same direct economy itineraries
 and prices present in `AvailabilityTrips`, including BA178 and AA142 at 30,000
-miles. The API reported `RemainingSeats: 0` for these visible awards; the
-website did not display a seat count, so the mapper's deliberate preservation
-of zero was verified against the payload but could not be compared as a
-user-visible field. No mapper discrepancy was found.
+miles. The API reported `RemainingSeats: 0` for these visible awards while the
+website did not display a seat count. Per the Seats.aero source-capability
+documentation, that zero represents an unknown count for American in this
+situation. The mapper stores it as unknown rather than misclassifying a visible
+award as sold out. No price, cabin, or stop-type discrepancy was found.
 
 ## Open items from Phase 0 checklist
 

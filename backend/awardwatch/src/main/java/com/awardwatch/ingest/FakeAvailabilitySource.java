@@ -83,18 +83,18 @@ public final class FakeAvailabilitySource implements AvailabilitySource{
         Cabin cabin,
         boolean nonstop,
         int mileageCost,
-        int seatsRemaining,
+        Integer seatsRemaining,
         Duration sourceAge
     ) {
         public AwardTemplate {
             Objects.requireNonNull(departureDate, "departureDate cannot be null");
             Objects.requireNonNull(cabin, "cabin cannot be null");
 
-            if (mileageCost < 0) {
-                throw new IllegalArgumentException("mileageCost cannot be negative");
+            if (mileageCost <= 0) {
+                throw new IllegalArgumentException("mileageCost must be positive");
             }
 
-            if (seatsRemaining < 0) {
+            if (seatsRemaining != null && seatsRemaining < 0) {
                 throw new IllegalArgumentException("seatsRemaining cannot be negative");
             }
 

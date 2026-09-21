@@ -62,6 +62,7 @@ class SeatsAeroClientTest {
                                 + "&take=1000"
                                 + "&skip=0"
                                 + "&include_trips=true"
+                                + "&min_cabin_pct=0"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))
@@ -95,6 +96,7 @@ class SeatsAeroClientTest {
                                 + "&take=1000"
                                 + "&skip=1000"
                                 + "&include_trips=true"
+                                + "&min_cabin_pct=0"
                                 + "&cursor=1689009958"
                 ))
                 .andExpect(method(HttpMethod.GET))
@@ -129,6 +131,7 @@ class SeatsAeroClientTest {
                                 + "&take=1000"
                                 + "&skip=0"
                                 + "&include_trips=false"
+                                + "&min_cabin_pct=0"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))
@@ -170,6 +173,7 @@ class SeatsAeroClientTest {
                                 + "&take=1000"
                                 + "&skip=0"
                                 + "&include_trips=true"
+                                + "&min_cabin_pct=0"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))
@@ -223,6 +227,7 @@ class SeatsAeroClientTest {
                                 + "&take=1000"
                                 + "&skip=0"
                                 + "&include_trips=true"
+                                + "&min_cabin_pct=0"
                 ))
                 .andExpect(method(HttpMethod.GET))
                 .andExpect(header("Partner-Authorization", FAKE_API_KEY))

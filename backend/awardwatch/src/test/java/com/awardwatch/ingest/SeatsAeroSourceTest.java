@@ -783,7 +783,7 @@ class SeatsAeroSourceTest {
     }
 
     @Test
-    void summaryCandidatePreservesZeroSeats() throws AvailabilitySourceException {
+    void summaryCandidateTreatsZeroSeatsAsUnknown() throws AvailabilitySourceException {
         SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
         RouteQuery query = query();
         when(client.search(any())).thenReturn(
@@ -807,9 +807,57 @@ class SeatsAeroSourceTest {
 
         assertThat(candidates).singleElement().satisfies(candidate -> {
             assertThat(candidate.entry().mileageCost()).isEqualTo(50_000);
-            assertThat(candidate.entry().seatsRemaining()).isZero();
+            assertThat(candidate.entry().seatsRemaining()).isNull();
             assertThat(candidate.entry().nonstop()).isFalse();
         });
+    }
+
+    @Test
+    void summaryCandidateTreatsMissingSeatsAsUnknown() throws AvailabilitySourceException {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        when(client.search(any())).thenReturn(
+            page(
+                false,
+                null,
+                availabilityWithAwards(
+                    "A",
+                    """
+                    "YAvailable": true,
+                    "YMileageCost": "50000",
+                    "YRemainingSeats": null,
+                    "YDirect": false
+                    """
+                )
+            )
+        );
+
+        assertThat(source.fetchCandidates(query()))
+            .singleElement()
+            .satisfies(candidate -> assertThat(candidate.entry().seatsRemaining()).isNull());
+    }
+
+    @Test
+    void directSummaryTreatsMissingSeatsAsUnknown() throws AvailabilitySourceException {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        when(client.search(any())).thenReturn(
+            page(
+                false,
+                null,
+                availabilityWithAwards(
+                    "A",
+                    """
+                    "YAvailable": true,
+                    "YDirect": true,
+                    "YDirectMileageCost": 50000,
+                    "YDirectRemainingSeats": null
+                    """
+                )
+            )
+        );
+
+        assertThat(source.fetchCandidates(query()))
+            .singleElement()
+            .satisfies(candidate -> assertThat(candidate.entry().seatsRemaining()).isNull());
     }
 
     @Test
@@ -844,6 +892,24 @@ class SeatsAeroSourceTest {
                     """.formatted(jsonNumber(invalidMileageCost))
                 ),
                 "direct mileage cost must be positive"
+            );
+        }
+    }
+
+    @Test
+    void availableConnectingSummaryRequiresPositiveMileageCost() {
+        for (String invalidMileageCost : List.of("0", "-1")) {
+            assertRetryableCandidateFailure(
+                availabilityWithAwards(
+                    "A",
+                    """
+                    "YAvailable": true,
+                    "YMileageCost": "%s",
+                    "YRemainingSeats": 1,
+                    "YDirect": false
+                    """.formatted(invalidMileageCost)
+                ),
+                "invalid mileage cost"
             );
         }
     }
@@ -1016,23 +1082,35 @@ class SeatsAeroSourceTest {
     }
 
     @Test
-    void missingTripSeatsIsRetryableFailure() {
-        assertRetryableCandidateFailure(
-            availabilityWithAwards(
-                "A",
-                "\"YAvailable\": false",
-                trip(
-                    "trip-1", "A", "economy", 45_000, null, 0,
-                    "american", null, "[]", "[]"
+    void missingTripSeatsAreTreatedAsUnknown() throws AvailabilitySourceException {
+        SeatsAeroSource source = new SeatsAeroSource(client, objectMapper, clock);
+        when(client.search(any())).thenReturn(
+            page(
+                false,
+                null,
+                availabilityWithAwards(
+                    "A",
+                    "\"YAvailable\": false",
+                    trip(
+                        "trip-1", "A", "economy", 45_000, null, 0,
+                        "american", null, "[]", "[]"
+                    )
                 )
-            ),
-            "remaining seats is missing"
+            )
         );
+
+        assertThat(source.fetchCandidates(query()))
+            .singleElement()
+            .satisfies(candidate -> assertThat(candidate.entry().seatsRemaining()).isNull());
     }
 
     @Test
-    void negativeTripValuesAreRetryableFailures() {
+    void nonPositiveOrNegativeTripValuesAreRetryableFailures() {
         List<String> invalidTrips = List.of(
+            trip(
+                "zero-mileage", "A", "economy", 0, 2, 0,
+                "american", null, "[]", "[]"
+            ),
             trip(
                 "negative-mileage", "A", "economy", -1, 2, 0,
                 "american", null, "[]", "[]"
@@ -1183,6 +1261,7 @@ class SeatsAeroSourceTest {
 
         List<SeatsAeroSource.AwardCandidate> candidates = List.of(
             candidate(query, 50_000, 9, false, observedAt, refreshedAt, "expensive"),
+            candidate(query, 45_000, null, false, observedAt, refreshedAt, "cheap-unknown"),
             candidate(query, 45_000, 1, false, observedAt, refreshedAt, "cheap-few"),
             candidate(query, 45_000, 3, false, observedAt, refreshedAt, "cheap-many"),
             candidate(query, 60_000, 2, true, observedAt, refreshedAt, "nonstop")
@@ -1314,6 +1393,57 @@ class SeatsAeroSourceTest {
     }
 
     @Test
+    void rateLimitedResponseHonorsRetryAfterHeader() {
+        List<Duration> delays = new ArrayList<>();
+        SeatsAeroSource source = new SeatsAeroSource(
+            client,
+            objectMapper,
+            clock,
+            delays::add
+        );
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.RETRY_AFTER, "5");
+        RestClientResponseException cause = responseFailure(
+            HttpStatus.TOO_MANY_REQUESTS,
+            headers
+        );
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query()))
+            .isInstanceOf(AvailabilitySourceException.class);
+
+        verify(client, times(SeatsAeroSource.MAX_ATTEMPTS)).search(any());
+        assertThat(delays).containsExactly(Duration.ofSeconds(5), Duration.ofSeconds(5));
+    }
+
+    @Test
+    void rateLimitedResponseDefersLongResetToScheduler() {
+        List<Duration> delays = new ArrayList<>();
+        SeatsAeroSource source = new SeatsAeroSource(
+            client,
+            objectMapper,
+            clock,
+            delays::add
+        );
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-RateLimit-Reset", "3600");
+        RestClientResponseException cause = responseFailure(
+            HttpStatus.TOO_MANY_REQUESTS,
+            headers
+        );
+        when(client.search(any())).thenThrow(cause);
+
+        assertThatThrownBy(() -> source.fetch(query()))
+            .isInstanceOfSatisfying(
+                AvailabilitySourceException.class,
+                exception -> assertThat(exception.retryable()).isTrue()
+            );
+
+        verify(client, times(1)).search(any());
+        assertThat(delays).isEmpty();
+    }
+
+    @Test
     void serverErrorRetriesWithExponentialBackoffAndCanRecover()
         throws AvailabilitySourceException {
         List<Duration> delays = new ArrayList<>();
@@ -1396,7 +1526,7 @@ class SeatsAeroSourceTest {
     private SeatsAeroSource.AwardCandidate candidate(
         RouteQuery query,
         int mileageCost,
-        int seatsRemaining,
+        Integer seatsRemaining,
         boolean nonstop,
         Instant observedAt,
         Instant refreshedAt,
@@ -1419,11 +1549,18 @@ class SeatsAeroSourceTest {
     }
 
     private RestClientResponseException responseFailure(HttpStatus status) {
+        return responseFailure(status, HttpHeaders.EMPTY);
+    }
+
+    private RestClientResponseException responseFailure(
+        HttpStatus status,
+        HttpHeaders headers
+    ) {
         return new RestClientResponseException(
             status.getReasonPhrase(),
             status,
             status.getReasonPhrase(),
-            HttpHeaders.EMPTY,
+            headers,
             new byte[0],
             StandardCharsets.UTF_8
         );

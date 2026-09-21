@@ -14,13 +14,13 @@ class AvailabilityEntryTest {
     private static final LocalDate DEPARTURE = LocalDate.of(2026, 8, 9);
     private static final Instant OBSERVED = Instant.parse("2026-08-01T12:00:00Z");
 
-    private static AvailabilityEntry entry(Cabin cabin, boolean nonstop, int mileageCost, int seatsRemaining) {
+    private static AvailabilityEntry entry(Cabin cabin, boolean nonstop, int mileageCost, Integer seatsRemaining) {
         return new AvailabilityEntry(ATL_NRT, DEPARTURE, Program.AADVANTAGE, cabin, mileageCost, seatsRemaining, nonstop, OBSERVED, null);
     }
 
     @Test
     void negativeMileageRejected() {
-        assertThatThrownBy(() -> entry(Cabin.BUSINESS, true, -1, 2)).isInstanceOf(IllegalArgumentException.class).hasMessage("mileageCost cannot be negative");
+        assertThatThrownBy(() -> entry(Cabin.BUSINESS, true, -1, 2)).isInstanceOf(IllegalArgumentException.class).hasMessage("mileageCost must be positive");
     }
 
     @Test
@@ -34,8 +34,13 @@ class AvailabilityEntryTest {
     }
 
     @Test
-    void zeroMileageAccepted() {
-        assertThatCode(() -> entry(Cabin.BUSINESS, true, 0, 2)).doesNotThrowAnyException();
+    void zeroMileageRejected() {
+        assertThatThrownBy(() -> entry(Cabin.BUSINESS, true, 0, 2)).isInstanceOf(IllegalArgumentException.class).hasMessage("mileageCost must be positive");
+    }
+
+    @Test
+    void unknownSeatCountAccepted() {
+        assertThat(entry(Cabin.BUSINESS, true, 60_000, null).seatsRemaining()).isNull();
     }
 
     @Test

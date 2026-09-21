@@ -12,6 +12,9 @@ import com.awardwatch.domain.Snapshot;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -31,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -45,6 +49,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
     static final int MAX_ATTEMPTS = 3;
     static final Duration INITIAL_RETRY_DELAY = Duration.ofSeconds(1);
+    static final Duration MAX_INLINE_RETRY_DELAY = Duration.ofSeconds(30);
     private static final Map<Program, String> PROGRAM_TO_SOURCE_SLUG = createProgramToSourceSlug();
     private static final Map<String, Program> SOURCE_SLUG_TO_PROGRAM = reverse(PROGRAM_TO_SOURCE_SLUG);
     private static final Map<Cabin, String> CABIN_TO_VENDOR_NAME = createCabinToVendorName();
@@ -52,9 +57,8 @@ public final class SeatsAeroSource implements AvailabilitySource {
     private static final Comparator<AwardCandidate> PREFERRED_CANDIDATE =
         Comparator.comparingInt((AwardCandidate candidate) -> candidate.entry().mileageCost())
             .thenComparing(
-                Comparator.comparingInt(
-                    (AwardCandidate candidate) -> candidate.entry().seatsRemaining()
-                ).reversed()
+                candidate -> candidate.entry().seatsRemaining(),
+                Comparator.nullsLast(Comparator.reverseOrder())
             )
             .thenComparing(AwardCandidate::vendorId);
     private static final Logger LOGGER = LoggerFactory.getLogger(SeatsAeroSource.class);
@@ -331,10 +335,6 @@ public final class SeatsAeroSource implements AvailabilitySource {
                 throw invalidCandidate(query, response.id(), "direct mileage cost must be positive");
             }
 
-            if (directSeatsRemaining == null) {
-                throw invalidCandidate(query, response.id(), "direct seat count is missing");
-            }
-
             candidates.add(createCandidate(
                 query,
                 observation,
@@ -352,10 +352,6 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
         if (!direct) {
             int parseMileage = parseMileageCost(query, response.id(), mileageCost);
-
-            if (seatsRemaining == null) {
-                throw invalidCandidate(query, response.id(), "seat count is missing");
-            }
 
             candidates.add(createCandidate(
                 query,
@@ -385,8 +381,8 @@ public final class SeatsAeroSource implements AvailabilitySource {
         try {
             int parsed = Integer.parseInt(mileageCost);
 
-            if (parsed < 0) {
-                throw new NumberFormatException("negative mielage cost");
+            if (parsed <= 0) {
+                throw new NumberFormatException("non-positive mileage cost");
             }
 
             return parsed;
@@ -432,14 +428,6 @@ public final class SeatsAeroSource implements AvailabilitySource {
                     query,
                     trip.id(),
                     "mileage cost is missing"
-                );
-            }
-
-            if (trip.remainingSeats() == null) {
-                throw invalidCandidate(
-                    query,
-                    trip.id(),
-                    "remaining seats is missing"
                 );
             }
 
@@ -535,7 +523,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
         ObservedAvailability observation,
         Cabin cabin,
         int mileageCost,
-        int seatsRemaining,
+        Integer seatsRemaining,
         boolean nonstop,
         String vendorId
     ) throws AvailabilitySourceException {
@@ -548,7 +536,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
                 query.program(),
                 cabin,
                 mileageCost,
-                seatsRemaining,
+                normalizeSeatCount(seatsRemaining),
                 nonstop,
                 observation.observedAt(),
                 availability.updatedAt()
@@ -564,6 +552,10 @@ public final class SeatsAeroSource implements AvailabilitySource {
                 exception
             );
         }
+    }
+
+    private Integer normalizeSeatCount(Integer seatsRemaining) {
+        return seatsRemaining != null && seatsRemaining == 0 ? null : seatsRemaining;
     }
 
     private AvailabilitySourceException invalidCandidate(
@@ -710,7 +702,18 @@ public final class SeatsAeroSource implements AvailabilitySource {
                 return client.search(request);
             } catch (RestClientResponseException exception) {
                 if (isRetryableHttpStatus(exception) && attempt < MAX_ATTEMPTS) {
-                    waitBeforeRetry(query, exception, attempt, retryDelay);
+                    Duration effectiveDelay = effectiveRetryDelay(exception, retryDelay);
+
+                    if (effectiveDelay.compareTo(MAX_INLINE_RETRY_DELAY) > 0) {
+                        LOGGER.warn(
+                            "Seats.aero returned HTTP {} with retry delay {}; deferring retry to the scheduler",
+                            exception.getStatusCode().value(),
+                            effectiveDelay
+                        );
+                        throw mapResponseFailure(query, exception);
+                    }
+
+                    waitBeforeRetry(query, exception, attempt, effectiveDelay);
                     retryDelay = retryDelay.multipliedBy(2);
                     attempt++;
                     continue;
@@ -730,6 +733,65 @@ public final class SeatsAeroSource implements AvailabilitySource {
     private boolean isRetryableHttpStatus(RestClientResponseException exception) {
         return exception.getStatusCode().value() == 429
             || exception.getStatusCode().is5xxServerError();
+    }
+
+    private Duration effectiveRetryDelay(
+        RestClientResponseException exception,
+        Duration exponentialDelay
+    ) {
+        if (exception.getStatusCode().value() != 429) {
+            return exponentialDelay;
+        }
+
+        Duration serverDelay = serverRequestedRetryDelay(exception.getResponseHeaders());
+        return serverDelay.compareTo(exponentialDelay) > 0 ? serverDelay : exponentialDelay;
+    }
+
+    private Duration serverRequestedRetryDelay(HttpHeaders headers) {
+        if (headers == null) {
+            return Duration.ZERO;
+        }
+
+        Duration retryAfter = parseRetryAfter(headers.getFirst(HttpHeaders.RETRY_AFTER));
+        Duration rateLimitReset = parseDelaySeconds(headers.getFirst("X-RateLimit-Reset"));
+        return retryAfter.compareTo(rateLimitReset) >= 0 ? retryAfter : rateLimitReset;
+    }
+
+    private Duration parseRetryAfter(String value) {
+        Duration seconds = parseDelaySeconds(value);
+
+        if (!seconds.isZero() || "0".equals(value)) {
+            return seconds;
+        }
+
+        if (value == null || value.isBlank()) {
+            return Duration.ZERO;
+        }
+
+        try {
+            Instant retryAt = ZonedDateTime.parse(
+                value,
+                DateTimeFormatter.RFC_1123_DATE_TIME
+            ).toInstant();
+            Duration delay = Duration.between(clock.instant(), retryAt);
+            return delay.isNegative() ? Duration.ZERO : delay;
+        } catch (DateTimeParseException exception) {
+            LOGGER.warn("Ignoring invalid Seats.aero Retry-After header: {}", value);
+            return Duration.ZERO;
+        }
+    }
+
+    private Duration parseDelaySeconds(String value) {
+        if (value == null || value.isBlank()) {
+            return Duration.ZERO;
+        }
+
+        try {
+            long seconds = Long.parseLong(value);
+            return seconds < 0 ? Duration.ZERO : Duration.ofSeconds(seconds);
+        } catch (NumberFormatException | ArithmeticException exception) {
+            return Duration.ZERO;
+        }
     }
 
     private void waitBeforeRetry(
