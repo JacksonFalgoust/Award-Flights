@@ -144,15 +144,15 @@ plan changes.
 
 ## Phase 3 — Persistence
 
-- [ ] Flyway migration V1: `app_user`, `watch`, `snapshot`, `availability_entry`,
+- [x] Flyway migration V1: `app_user`, `watch`, `snapshot`, `availability_entry`,
       `crawl_state`, `alert_event`.
-      - [ ] `snapshot` carries `date_from`, `date_to`, `program` and `succeeded`
+      - [x] `snapshot` carries `date_from`, `date_to`, `program` and `succeeded`
             (ARCHITECTURE §4). The date span is not decoration: without it Phase 5
             cannot intersect two snapshots' ranges, and a narrowed range reads as
             every award on the dropped dates going **GONE**.
-      - [ ] Decide whether `crawl_state` still keys correctly on
-            `(origin, destination)` alone. It is now the only table with no program
-            or date dimension, while crawling is per `(route, program, date range)`.
+      - [x] Key `crawl_state` by
+            `(origin, destination, program, date_from, date_to)`, matching the full
+            identity of the `RouteQuery` being scheduled.
 - [ ] JPA entities + Spring Data repositories.
 - [ ] `SnapshotService.record(route, entries, callsUsed)` — writes one snapshot
       plus its entries in a single transaction. **Append only; never update an
