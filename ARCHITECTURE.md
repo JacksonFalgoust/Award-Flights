@@ -88,7 +88,7 @@ public record AvailabilityEntry(
         Program program,        // AEROPLAN, UNITED, ...
         Cabin cabin,            // ECONOMY / PREMIUM_ECONOMY / BUSINESS / FIRST
         int mileageCost,        // miles required, one-way, per passenger
-        int seatsRemaining,     // 0 means "shown but not bookable"
+        Integer seatsRemaining, // null means available with an unknown count; 0 means none
         boolean nonstop,        // this award on a nonstop; connecting is its own entry
         Instant observedAt,     // when we saw this, not when the source refreshed it
         Instant refreshedAt     // when the source last refreshed it; null if unreported
@@ -388,7 +388,7 @@ CREATE TABLE availability_entry (
     program         TEXT NOT NULL,
     cabin           CHAR(1) NOT NULL,
     mileage_cost    INTEGER NOT NULL,
-    seats_remaining SMALLINT NOT NULL,
+    seats_remaining SMALLINT,                  -- NULL = available, count unknown
     nonstop         BOOLEAN NOT NULL,
     refreshed_at    TIMESTAMPTZ               -- source's own last-refresh; NULL = unreported
 );

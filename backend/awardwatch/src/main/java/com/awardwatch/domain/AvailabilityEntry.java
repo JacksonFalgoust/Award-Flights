@@ -22,8 +22,9 @@ import java.util.Optional;
  * @param program        the Mileage Program the award is priced in
  * @param cabin          the class of service the award is priced in
  * @param mileageCost    miles required, one-way, per passenger
- * @param seatsRemaining seats the source reports bookable; {@code 0} means the award was
- *                       shown but is not bookable, which is different from absent
+ * @param seatsRemaining seats the source reports bookable; {@code null} means the award is
+ *                       available but the source did not report a reliable count, while
+ *                       {@code 0} means it explicitly reported no remaining seats
  * @param nonstop        whether this award is on a nonstop itinerary. The connecting award
  *                       in the same cabin is a separate, separately priced entry
  * @param observedAt     when <em>we</em> pulled this from the source. Not when the source
@@ -33,7 +34,7 @@ import java.util.Optional;
  *                       never substitute {@code observedAt}, which would claim the data is
  *                       perfectly fresh when its age is in fact unknown
  */
-public record AvailabilityEntry(Route route, LocalDate departureDate, Program program, Cabin cabin, int mileageCost, int seatsRemaining, boolean nonstop, Instant observedAt, Instant refreshedAt) {
+public record AvailabilityEntry(Route route, LocalDate departureDate, Program program, Cabin cabin, int mileageCost, Integer seatsRemaining, boolean nonstop, Instant observedAt, Instant refreshedAt) {
 
     /**
      * Rejects any entry that could not have been observed, so that an invalid entry cannot
@@ -43,9 +44,10 @@ public record AvailabilityEntry(Route route, LocalDate departureDate, Program pr
      * guaranteed by {@link Route} and {@link AirportCode}; what remains here is the
      * arithmetic and the relationship between the two timestamps.
      *
-     * @throws NullPointerException     if any component other than {@code refreshedAt} is null
-     * @throws IllegalArgumentException if {@code mileageCost} or {@code seatsRemaining} is
-     *                                  negative, or if {@code refreshedAt} is after
+     * @throws NullPointerException     if any component other than {@code seatsRemaining} or
+     *                                  {@code refreshedAt} is null
+     * @throws IllegalArgumentException if {@code mileageCost} is not positive,
+     *                                  {@code seatsRemaining} is negative, or if {@code refreshedAt} is after
      *                                  {@code observedAt} &mdash; the source cannot have
      *                                  refreshed data after we read it
      */
@@ -57,11 +59,11 @@ public record AvailabilityEntry(Route route, LocalDate departureDate, Program pr
         Objects.requireNonNull(cabin, "cabin cannot be null");
         Objects.requireNonNull(observedAt, "observedAt cannot be null");
 
-        if (mileageCost < 0) {
-            throw new IllegalArgumentException("mileageCost cannot be negative");
+        if (mileageCost <= 0) {
+            throw new IllegalArgumentException("mileageCost must be positive");
         }
 
-        if (seatsRemaining < 0) {
+        if (seatsRemaining != null && seatsRemaining < 0) {
             throw new IllegalArgumentException("seatsRemaining cannot be negative");
         }
 

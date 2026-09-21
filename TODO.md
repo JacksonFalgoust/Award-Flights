@@ -130,14 +130,14 @@ plan changes.
 
 ## Phase 2 — Ingest
 
-- [ ] `SeatsAeroClient` using `RestClient`, `Partner-Authorization` header from config.
-- [ ] `SeatsAeroSource implements AvailabilitySource` — mapping layer only.
-- [ ] Unit tests for the mapper using the Phase 0 saved JSON. Cover the ugly
+- [x] `SeatsAeroClient` using `RestClient`, `Partner-Authorization` header from config.
+- [x] `SeatsAeroSource implements AvailabilitySource` — mapping layer only.
+- [x] Unit tests for the mapper using the Phase 0 saved JSON. Cover the ugly
       cases: null mileage, zero seats, mixed cabin, multi-segment.
-- [ ] Error handling: distinguish 401 (bad key), 429 (rate limit), 5xx (retry),
+- [x] Error handling: distinguish 401 (bad key), 429 (rate limit), 5xx (retry),
       and map each to a typed exception. Don't let a 429 look like "no seats."
-- [ ] Retry with exponential backoff on 429/5xx only.
-- [ ] Verify against the live API and compare one result by hand with the
+- [x] Retry with exponential backoff on 429/5xx only.
+- [x] Verify against the live API and compare one result by hand with the
       seats.aero website. If they disagree, the mapper is wrong.
 
 ---
