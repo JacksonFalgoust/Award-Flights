@@ -348,6 +348,14 @@ Separate React/Vite/Tailwind app. Talks to the REST API only.
 ## 4. Data model
 
 ```sql
+-- The locally authenticated owner of the watches.
+CREATE TABLE app_user (
+    id              BIGSERIAL PRIMARY KEY,
+    email           VARCHAR(320) NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- A user's standing interest in a route. Drives crawl priority AND alerts.
 CREATE TABLE watch (
     id              BIGSERIAL PRIMARY KEY,
@@ -390,6 +398,7 @@ CREATE TABLE availability_entry (
     mileage_cost    INTEGER NOT NULL,
     seats_remaining SMALLINT,                  -- NULL = available, count unknown
     nonstop         BOOLEAN NOT NULL,
+    observed_at     TIMESTAMPTZ NOT NULL,      -- when this individual entry was read
     refreshed_at    TIMESTAMPTZ               -- source's own last-refresh; NULL = unreported
 );
 
@@ -400,9 +409,12 @@ CREATE INDEX ON snapshot (origin, destination, program, observed_at DESC);
 CREATE TABLE crawl_state (
     origin          CHAR(3) NOT NULL,
     destination     CHAR(3) NOT NULL,
+    program         TEXT NOT NULL,
+    date_from       DATE NOT NULL,
+    date_to         DATE NOT NULL,
     last_crawled_at TIMESTAMPTZ,
     consecutive_empty SMALLINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (origin, destination)
+    PRIMARY KEY (origin, destination, program, date_from, date_to)
 );
 
 -- What we already told the user about, so we don't tell them twice.
