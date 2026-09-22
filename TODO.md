@@ -161,7 +161,7 @@ plan changes.
       `(route, program)`. The diff engine needs exactly this and nothing else —
       note it is keyed on program too, since snapshots for different programs are
       different fetches and never diff against each other.
-- [ ] Integration test with Testcontainers (or a throwaway Compose DB).
+- [x] Integration test with Testcontainers (PostgreSQL 16).
 
 ---
 
