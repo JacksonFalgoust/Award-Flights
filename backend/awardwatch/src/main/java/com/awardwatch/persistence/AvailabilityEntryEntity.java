@@ -54,6 +54,9 @@ public class AvailabilityEntryEntity {
     @Column(nullable = false, updatable = false)
     private boolean nonstop;
 
+    @Column(name = "observed_at", nullable = false, updatable = false, columnDefinition = "timestamptz")
+    private Instant observedAt;
+
     @Column(name = "refreshed_at", updatable = false, columnDefinition = "timestamptz")
     private Instant refreshedAt;
 
@@ -67,6 +70,7 @@ public class AvailabilityEntryEntity {
         int mileageCost,
         Integer seatsRemaining,
         boolean nonstop,
+        Instant observedAt,
         Instant refreshedAt
     ) {
         this.snapshot = Objects.requireNonNull(snapshot, "snapshot cannot be null");
@@ -76,6 +80,7 @@ public class AvailabilityEntryEntity {
         this.mileageCost = mileageCost;
         this.seatsRemaining = seatsRemaining;
         this.nonstop = nonstop;
+        this.observedAt = Objects.requireNonNull(observedAt, "observedAt cannot be null");
         this.refreshedAt = refreshedAt;
     }
 
@@ -109,6 +114,10 @@ public class AvailabilityEntryEntity {
 
     public boolean isNonstop() {
         return nonstop;
+    }
+
+    public Instant getObservedAt() {
+        return observedAt;
     }
 
     public Instant getRefreshedAt() {

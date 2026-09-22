@@ -154,10 +154,10 @@ plan changes.
             `(origin, destination, program, date_from, date_to)`, matching the full
             identity of the `RouteQuery` being scheduled.
 - [x] JPA entities + Spring Data repositories.
-- [ ] `SnapshotService.record(route, entries, callsUsed)` — writes one snapshot
+- [x] `SnapshotService.record(snapshot, callsUsed, source)` — writes one snapshot
       plus its entries in a single transaction. **Append only; never update an
       entry in place.**
-- [ ] Repository method: newest two *successful* snapshots for one
+- [x] Repository method: newest two *successful* snapshots for one
       `(route, program)`. The diff engine needs exactly this and nothing else —
       note it is keyed on program too, since snapshots for different programs are
       different fetches and never diff against each other.

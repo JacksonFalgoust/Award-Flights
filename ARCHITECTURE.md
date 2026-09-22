@@ -398,6 +398,7 @@ CREATE TABLE availability_entry (
     mileage_cost    INTEGER NOT NULL,
     seats_remaining SMALLINT,                  -- NULL = available, count unknown
     nonstop         BOOLEAN NOT NULL,
+    observed_at     TIMESTAMPTZ NOT NULL,      -- when this individual entry was read
     refreshed_at    TIMESTAMPTZ               -- source's own last-refresh; NULL = unreported
 );
 
