@@ -167,12 +167,17 @@ plan changes.
 
 ## Phase 4 — Quota budgeting
 
-- [ ] `QuotaBudgeter` backed by Redis key `quota:{UTC date}`.
-      - [ ] `tryReserve(int calls)` — atomic `DECRBY`, returns false if it would
+- [x] `QuotaBudgeter` backed by Redis key `quota:{UTC date}`.
+      - [x] `tryReserve(int calls)` — atomic `DECRBY`, returns false if it would
             go negative. Reserve *before* the call, refund on transport failure.
-      - [ ] Reserve floor: refuse automated spend below 10% remaining so manual
+      - [x] Reserve floor: refuse automated spend below 10% remaining so manual
             searches still work.
-      - [ ] TTL on the key so old days expire on their own.
+      - [x] TTL on the key so old days expire on their own.
+      - Defaults to 1,000 calls (`QUOTA_DAILY_LIMIT` override). Manual reservations
+        may use the protected floor. Date-explicit reservations and refunds keep
+        late refunds on the original UTC day; keys expire at that day's midnight
+        plus two days. Callers must refund at most once per successful reservation.
+        HTTP wiring (including per-page/per-retry accounting) remains separate.
 - [ ] `@Scheduled` `CrawlScheduler` running every 5 minutes.
       - [ ] Split a `watch` window longer than `DateRange.MAX_DAYS` (90) into
             several `RouteQuery` objects. `DateRange` rejects a wider span at
