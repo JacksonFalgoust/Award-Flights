@@ -53,7 +53,7 @@ public class CrawlRunner {
     }
 
     private boolean crawlLocked(RouteQuery query, RouteLock.Lease lease) {
-        CallBudget budget = new CallBudget(lease);
+        CallBudget budget = new CallBudget(query, lease);
         Snapshot snapshot;
         try {
             snapshot = source.fetch(query, budget);
@@ -78,11 +78,13 @@ public class CrawlRunner {
     }
 
     private final class CallBudget implements SeatsAeroSource.CallAccounting {
+        private final RouteQuery query;
         private final RouteLock.Lease lease;
         private int callsUsed;
         private LocalDate reservationDate;
 
-        private CallBudget(RouteLock.Lease lease) {
+        private CallBudget(RouteQuery query, RouteLock.Lease lease) {
+            this.query = query;
             this.lease = lease;
         }
 
@@ -100,8 +102,16 @@ public class CrawlRunner {
 
         @Override
         public void transportFailed() {
-            quota.refund(reservationDate, 1);
-            callsUsed--;
+            try {
+                quota.refund(reservationDate, 1);
+                callsUsed--;
+                LOGGER.info("quota_refund source={} query={} quota_date={} calls=1 outcome=applied",
+                    SOURCE, query, reservationDate);
+            } catch (RuntimeException exception) {
+                LOGGER.warn("quota_refund source={} query={} quota_date={} calls=1 outcome=failed",
+                    SOURCE, query, reservationDate);
+                throw exception;
+            }
         }
     }
 

@@ -510,6 +510,19 @@ protocol: Redis failover or a process pause exceeding the lease can allow overla
 with an operation already in flight. Ownership checks prevent subsequent work
 once loss is detected.
 
+**Call cost logging.** Each completed `SeatsAeroClient.search` attempt emits an
+INFO `upstream_call` event with a unique call ID, route, program slug, date range,
+pagination offset, outcome, HTTP status, `cost` in quota calls and `duration_ms`.
+This includes retries, pages and direct client calls. HTTP responses (including
+errors and malformed payloads) cost 1; transport errors cost 0 under the existing
+quota policy. Other client errors conservatively retain cost 1. These are policy
+costs, not upstream billing measurements. Cache hits and rejected reservations
+make no HTTP attempt and emit no call-cost event. `quota_refund` events separately
+report the original UTC reservation date and whether the Redis refund applied or
+failed; a failed refund leaves the local counter debited despite transport cost 0.
+Credentials, headers, bodies and exception messages are omitted from these events.
+An in-flight request interrupted by process termination may have no completion log.
+
 ---
 
 ## 6. Diff-based alerting

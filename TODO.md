@@ -202,7 +202,12 @@ plan changes.
       owner-checked renewal/release protects successor locks. Cache is rechecked
       under the lock, held through persistence and cache writes. Lease loss stops
       further work at the next ownership check.
-- [ ] Log every call with its cost. You need to see where quota went.
+- [x] Log every call with its cost. You need to see where quota went.
+      `upstream_call` INFO events cover every client attempt (including retries and
+      pages): call ID, route, program slug, dates, page offset, outcome, HTTP status,
+      cost in calls and elapsed milliseconds. Responses cost 1, transport failures
+      cost 0 under the current accounting policy; `quota_refund` separately records
+      whether Redis refunds applied or failed. No credentials or response bodies.
 
 ---
 
