@@ -191,7 +191,11 @@ plan changes.
         snapshots and crawl state commit together; failures are never baselines.
 - [x] Route scoring: `urgency * staleness * hitRate` (formula in ARCHITECTURE §5).
       - [x] Unit test the scorer directly — it's pure logic, no excuse not to.
-- [ ] Redis response cache with 15-minute TTL, keyed by normalized query.
+- [x] Redis response cache with 15-minute TTL, keyed by normalized query.
+      Successful persisted responses (including empty results) are cached by source,
+      route, program and both date endpoints. Hits spend no quota and do not append
+      snapshots or update scoring history. Reads do not extend expiry; failed and
+      partial fetches are never cached. Direct source callers bypass this cache.
 - [ ] Distributed lock per route so two ticks can't crawl the same route at once.
 - [ ] Log every call with its cost. You need to see where quota went.
 

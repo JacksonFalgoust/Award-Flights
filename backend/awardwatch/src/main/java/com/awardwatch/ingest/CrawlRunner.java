@@ -22,14 +22,16 @@ public class CrawlRunner {
     private final CrawlResultService results;
     private final SnapshotService snapshots;
     private final Clock clock;
+    private final ResponseCache cache;
 
     public CrawlRunner(SeatsAeroSource source, QuotaBudgeter quota, CrawlResultService results,
-                       SnapshotService snapshots, Clock clock) {
+                       SnapshotService snapshots, Clock clock, ResponseCache cache) {
         this.source = source;
         this.quota = quota;
         this.results = results;
         this.snapshots = snapshots;
         this.clock = clock;
+        this.cache = cache;
     }
 
     public boolean supports(Program program) {
@@ -38,6 +40,7 @@ public class CrawlRunner {
 
     /** Returns false when quota is exhausted, telling the scheduler to stop the tick. */
     public boolean crawl(RouteQuery query) {
+        if (cache.get(query).isPresent()) return true;
         CallBudget budget = new CallBudget();
         Snapshot snapshot;
         try {
@@ -54,6 +57,7 @@ public class CrawlRunner {
             return true;
         }
         results.record(snapshot, budget.callsUsed, SOURCE);
+        cache.put(snapshot);
         return true;
     }
 

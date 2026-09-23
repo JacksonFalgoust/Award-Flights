@@ -486,6 +486,15 @@ and all scores use the same clock instant.
 **Redis caching.** Identical route+date queries within a TTL (15 min) serve from
 cache and cost zero quota. This mostly protects against a user hammering the
 search box, and against overlapping watches on the same route.
+`ResponseCache` stores successful snapshots as JSON under a versioned seats.aero
+namespace, keyed by canonical airport codes, program and both date endpoints.
+Redis sets the value and 15-minute expiry atomically; reads never extend it.
+`CrawlRunner` checks it before reserving quota and fills it after persistence
+commits. Hits preserve original timestamps and do not append history or change
+crawl scoring. Successful empty responses are cached; failures and partial
+responses are not. Malformed or mismatched cached values are misses. Redis
+outages propagate, stopping the tick. Direct source fetches bypass the cache;
+the future manual search path can read the same `ResponseCache`.
 
 ---
 

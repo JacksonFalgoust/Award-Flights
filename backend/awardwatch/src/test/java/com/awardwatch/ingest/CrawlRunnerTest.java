@@ -9,6 +9,9 @@ import com.awardwatch.domain.DateRange;
 import com.awardwatch.domain.Program;
 import com.awardwatch.domain.Route;
 import com.awardwatch.domain.RouteQuery;
+import com.awardwatch.domain.Snapshot;
+import java.util.List;
+import java.util.Optional;
 import com.awardwatch.persistence.CrawlResultService;
 import com.awardwatch.persistence.SnapshotService;
 import java.time.Clock;
@@ -39,6 +42,7 @@ class CrawlRunnerTest {
     private final QuotaBudgeter quota = mock(QuotaBudgeter.class);
     private final CrawlResultService results = mock(CrawlResultService.class);
     private final SnapshotService snapshots = mock(SnapshotService.class);
+    private final ResponseCache cache = mock(ResponseCache.class);
     private CrawlRunner runner;
 
     @BeforeEach
@@ -51,12 +55,14 @@ class CrawlRunnerTest {
     void reservesBeforeEveryPageAndPersistsActualCallCount() {
         when(client.search(any())).thenReturn(FIRST_PAGE, EMPTY);
         assertThat(runner.crawl(QUERY)).isTrue();
-        InOrder order = inOrder(quota, client, results);
+        InOrder order = inOrder(cache, quota, client, results);
+        order.verify(cache).get(QUERY);
         order.verify(quota).tryReserve(TODAY, 1);
         order.verify(client).search(any());
         order.verify(quota).tryReserve(TODAY, 1);
         order.verify(client).search(any());
         order.verify(results).record(argThat(s -> s.query().equals(QUERY)), eq(2), eq("seats.aero"));
+        order.verify(cache).put(argThat(s -> s.query().equals(QUERY)));
         verifyNoInteractions(snapshots);
     }
 
@@ -153,11 +159,36 @@ class CrawlRunnerTest {
         assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(DataAccessResourceFailureException.class);
         verify(quota, never()).refund(any(), anyInt());
         verifyNoInteractions(snapshots);
+        verify(cache, never()).put(any());
+    }
+
+    @Test
+    void cacheHitSkipsQuotaHttpAndPersistenceIncludingScoringHistory() {
+        var snapshot = new Snapshot(QUERY, NOW, List.of());
+        when(cache.get(QUERY)).thenReturn(Optional.of(snapshot));
+        assertThat(runner.crawl(QUERY)).isTrue();
+        verifyNoInteractions(quota, client, results, snapshots);
+        verify(cache, never()).put(any());
+    }
+
+    @Test
+    void cacheOutageStopsBeforeSpendingQuota() {
+        when(cache.get(QUERY)).thenThrow(new DataAccessResourceFailureException("offline"));
+        assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(DataAccessResourceFailureException.class);
+        verifyNoInteractions(quota, client, results, snapshots);
+    }
+
+    @Test
+    void failuresAndPartialResponsesNeverEnterCache() {
+        when(client.search(any())).thenReturn(FIRST_PAGE).thenThrow(http(401));
+        assertThat(runner.crawl(QUERY)).isTrue();
+        verify(cache, never()).put(any());
+        verifyNoInteractions(results);
     }
 
     private CrawlRunner runner(Clock clock) {
         SeatsAeroSource source = new SeatsAeroSource(client, JsonMapper.builder().build(), clock, delay -> { });
-        return new CrawlRunner(source, quota, results, snapshots, clock);
+        return new CrawlRunner(source, quota, results, snapshots, clock, cache);
     }
 
     private RestClientResponseException http(int status) {
