@@ -92,8 +92,8 @@ class CallLoggingTest {
     }
 
     @Test
-    void transportFailureCostsZeroWithoutLeakingExceptionDetails() {
-        server.expect(anything()).andRespond(withException(new IOException("private-transport-detail")));
+    void confirmedPreSendFailureCostsZeroWithoutLeakingExceptionDetails() {
+        server.expect(anything()).andRespond(withException(new java.net.UnknownHostException("private-transport-detail")));
         assertThatThrownBy(() -> source.fetch(query)).isInstanceOf(AvailabilitySourceException.class);
         assertThat(logs()).singleElement().satisfies(log -> assertThat(log)
             .contains("cost=0", "outcome=transport_error", "status=unknown")
@@ -136,7 +136,7 @@ class CallLoggingTest {
             CrawlRunner runner = new CrawlRunner(source, quota, mock(CrawlResultService.class),
                 mock(SnapshotService.class), Clock.fixed(Instant.parse("2026-09-23T12:00:00Z"), ZoneOffset.UTC),
                 mock(ResponseCache.class), locks);
-            server.expect(anything()).andRespond(withException(new IOException("transport failed")));
+            server.expect(anything()).andRespond(withException(new java.net.ConnectException("connection refused")));
             if (refundFails) assertThatIllegalStateException().isThrownBy(() -> runner.crawl(query));
             else assertThat(runner.crawl(query)).isTrue();
             assertThat(refunds.list.stream().map(ILoggingEvent::getFormattedMessage)
@@ -150,6 +150,19 @@ class CallLoggingTest {
             runnerLogger.detachAppender(refunds);
             refunds.stop();
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void uncertainTransportFailuresRemainChargedInLogs(boolean readTimeout) {
+        IOException cause = readTimeout ? new java.net.SocketTimeoutException("private-timeout")
+            : new IOException("private-unknown-failure");
+        server.expect(anything()).andRespond(withException(cause));
+        assertThatThrownBy(() -> source.fetch(query)).isInstanceOf(AvailabilitySourceException.class);
+        assertThat(logs()).singleElement().satisfies(message -> assertThat(message)
+            .contains("cost=1", "outcome=transport_error", "status=unknown")
+            .doesNotContain("private-timeout", "private-unknown-failure"));
+        server.verify();
     }
 
     private SeatsAeroSearchRequest request() {

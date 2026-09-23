@@ -169,7 +169,7 @@ plan changes.
 
 - [x] `QuotaBudgeter` backed by Redis key `quota:{UTC date}`.
       - [x] `tryReserve(int calls)` — atomic `DECRBY`, returns false if it would
-            go negative. Reserve *before* the call, refund on transport failure.
+            go negative. Reserve *before* the call; refund only confirmed pre-send failures.
       - [x] Reserve floor: refuse automated spend below 10% remaining so manual
             searches still work.
       - [x] TTL on the key so old days expire on their own.
@@ -177,8 +177,9 @@ plan changes.
         may use the protected floor. Date-explicit reservations and refunds keep
         late refunds on the original UTC day; keys expire at that day's midnight
         plus two days. Callers must refund at most once per successful reservation.
-        The scheduled crawl path reserves per page and per retry, refunds transport
-        failures, and records net calls used. Direct `AvailabilitySource.fetch`
+        The scheduled crawl path reserves per page and per retry, refunds confirmed
+        pre-send failures, and records net calls used. Read timeouts, connection
+        resets and other uncertain failures retain their reservation. Direct `AvailabilitySource.fetch`
         callers must still provide their own budgeting.
 - [x] `@Scheduled` `CrawlScheduler` running every 5 minutes.
       - [x] Split a `watch` window longer than `DateRange.MAX_DAYS` (90) into
@@ -189,6 +190,8 @@ plan changes.
         run in descending score order (creation order breaks ties); identical queries are
         deduplicated within a tick, and quota exhaustion stops the tick. Successful
         snapshots and crawl state commit together; failures are never baselines.
+        Expired watches are skipped, and ongoing windows are trimmed to the tick's
+        UTC date before splitting (today remains eligible).
 - [x] Route scoring: `urgency * staleness * hitRate` (formula in ARCHITECTURE §5).
       - [x] Unit test the scorer directly — it's pure logic, no excuse not to.
 - [x] Redis response cache with 15-minute TTL, keyed by normalized query.
@@ -205,8 +208,8 @@ plan changes.
 - [x] Log every call with its cost. You need to see where quota went.
       `upstream_call` INFO events cover every client attempt (including retries and
       pages): call ID, route, program slug, dates, page offset, outcome, HTTP status,
-      cost in calls and elapsed milliseconds. Responses cost 1, transport failures
-      cost 0 under the current accounting policy; `quota_refund` separately records
+      cost in calls and elapsed milliseconds. Responses and uncertain transport failures cost 1; confirmed pre-send
+      failures cost 0 under the current accounting policy; `quota_refund` separately records
       whether Redis refunds applied or failed. No credentials or response bodies.
 
 ---

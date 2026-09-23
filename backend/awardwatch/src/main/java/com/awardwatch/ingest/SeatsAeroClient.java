@@ -45,12 +45,13 @@ public class SeatsAeroClient {
             outcome = "http_error";
             throw exception;
         } catch (ResourceAccessException exception) {
-            cost = 0;
+            cost = RequestFailurePolicy.canRefund(exception) ? 0 : 1;
             outcome = "transport_error";
             throw exception;
         } finally {
             // Cost follows our quota policy: every HTTP response costs one call;
-            // transport failures cost zero. Redis refund success is logged separately.
+            // confirmed pre-send failures cost zero; uncertain failures stay charged.
+            // Redis refund success is logged separately.
             // Never include credentials, headers, response bodies or exception text.
             LOGGER.info("upstream_call call_id={} source=seats.aero endpoint=search origin={} destination={} "
                     + "program={} date_from={} date_to={} skip={} outcome={} status={} cost={} duration_ms={}",

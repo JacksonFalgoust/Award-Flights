@@ -456,7 +456,13 @@ over saved watches wastes most of it on routes nobody is waiting on.
 atomically per call so a crash mid-run can't double-spend. It refuses to hand out
 the last ~10% so a user-triggered manual search always has room.
 
-`CrawlScheduler` scores every route with an active watch:
+`CrawlScheduler` first skips active watches whose date window has ended and trims
+ongoing windows to the tick's UTC date, keeping today eligible. It then splits the
+remaining dates into queries and scores each one. The same tick instant drives
+date filtering and urgency; the original watch is unchanged. Query identities and
+crawl history keys reflect the trimmed ranges.
+
+`CrawlScheduler` scores every route with an eligible active watch:
 
 ```
 score = urgency * staleness * hitRate
@@ -514,8 +520,12 @@ once loss is detected.
 INFO `upstream_call` event with a unique call ID, route, program slug, date range,
 pagination offset, outcome, HTTP status, `cost` in quota calls and `duration_ms`.
 This includes retries, pages and direct client calls. HTTP responses (including
-errors and malformed payloads) cost 1; transport errors cost 0 under the existing
-quota policy. Other client errors conservatively retain cost 1. These are policy
+errors and malformed payloads) cost 1. Only confirmed pre-send failures (DNS,
+connection refusal/unreachable host, or an explicit connection timeout) cost 0
+and qualify for a quota refund. Read timeouts, connection resets, TLS errors and
+unknown I/O failures retain cost 1 because the provider may already have charged
+the request. `RequestFailurePolicy` applies the same classification to logging
+and refunds. Other client errors conservatively retain cost 1. These are policy
 costs, not upstream billing measurements. Cache hits and rejected reservations
 make no HTTP attempt and emit no call-cost event. `quota_refund` events separately
 report the original UTC reservation date and whether the Redis refund applied or

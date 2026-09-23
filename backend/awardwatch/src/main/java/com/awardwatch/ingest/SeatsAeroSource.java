@@ -38,7 +38,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
-import org.springframework.web.client.ResourceAccessException;
 
 @Component
 public final class SeatsAeroSource implements AvailabilitySource {
@@ -98,6 +97,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
         };
 
         void beforeCall();
+        /** Called only when the failure establishes the request was not sent. */
         void transportFailed();
     }
 
@@ -748,7 +748,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
                 throw mapResponseFailure(query, exception);
             } catch (RestClientException exception) {
-                if (exception instanceof ResourceAccessException) {
+                if (RequestFailurePolicy.canRefund(exception)) {
                     accounting.transportFailed();
                 }
                 throw AvailabilitySourceException.retryable(

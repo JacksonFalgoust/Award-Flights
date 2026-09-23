@@ -116,7 +116,7 @@ class CrawlRunnerTest {
         runner = runner(clock);
         when(client.search(any())).thenReturn(FIRST_PAGE).thenAnswer(invocation -> {
             when(clock.instant()).thenReturn(NOW.plusSeconds(2));
-            throw new ResourceAccessException("connection failed");
+            throw new ResourceAccessException("connection failed", new java.net.ConnectException("refused"));
         });
         assertThat(runner.crawl(QUERY)).isTrue();
         verify(quota).refund(TODAY, 1);
@@ -245,6 +245,26 @@ class CrawlRunnerTest {
         when(locks.tryAcquire(QUERY.route())).thenThrow(new DataAccessResourceFailureException("offline"));
         assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(DataAccessResourceFailureException.class);
         verifyNoInteractions(client, quota, results, snapshots, lease);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"read_timeout", "reset", "unknown"})
+    void uncertainTransportFailuresKeepAllDispatchedCallsCharged(String kind) {
+        java.io.IOException cause = switch (kind) {
+            case "read_timeout" -> new java.net.SocketTimeoutException("read timed out");
+            case "reset" -> new java.net.SocketException("connection reset");
+            default -> new java.io.IOException("unspecified failure");
+        };
+        when(client.search(any())).thenReturn(FIRST_PAGE)
+            .thenThrow(new ResourceAccessException("request dispatched", cause));
+        assertThat(runner.crawl(QUERY)).isTrue();
+        verify(client, times(2)).search(any());
+        verify(quota, times(2)).tryReserve(TODAY, 1);
+        verify(quota, never()).refund(any(), anyInt());
+        verify(snapshots).recordFailure(QUERY, NOW, 2, "seats.aero");
+        verifyNoInteractions(results);
+        verify(cache, never()).put(any());
+        verify(lease).close();
     }
 
     private CrawlRunner runner(Clock clock) {

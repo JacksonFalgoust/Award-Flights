@@ -81,7 +81,7 @@ public class QuotaBudgeter {
 
     /**
      * Refund a successful reservation exactly once, only when the request was not
-     * charged (transport failure, not an HTTP error). The caller retains the
+     * charged (confirmed pre-send failure, not a timeout after dispatch). The caller retains the
      * reservation date; late refunds never credit today's allowance. Credits are
      * capped at the daily limit and expired counters are not recreated.
      */

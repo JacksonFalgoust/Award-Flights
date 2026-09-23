@@ -12,6 +12,7 @@ import com.awardwatch.persistence.WatchRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -46,17 +47,18 @@ public class CrawlScheduler {
     /** Runs sequentially within a tick; the runner caches responses and locks routes across ticks. */
     @Scheduled(cron = "${crawl.cron:0 */5 * * * *}", zone = "UTC")
     public void crawl() {
+        Instant now = clock.instant();
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
         Set<RouteQuery> queries = new LinkedHashSet<>();
         for (WatchEntity watch : watches.findAllByActiveTrueOrderByCreatedAtAsc()) {
             if (!watch.isActive()) continue;
             try {
-                queries.addAll(queriesFor(watch));
+                queries.addAll(queriesFor(watch, today));
             } catch (IllegalArgumentException exception) {
                 LOGGER.warn("Skipping invalid watch {}: {}", watch.getId(), exception.getMessage());
             }
         }
         if (queries.isEmpty()) return;
-        Instant now = clock.instant();
         Map<CrawlStateId, CrawlStateEntity> history = states.findAllById(
             queries.stream().map(CrawlScheduler::stateId).toList()).stream()
             .collect(Collectors.toMap(CrawlStateEntity::getId, Function.identity()));
@@ -82,10 +84,16 @@ public class CrawlScheduler {
     }
 
     List<RouteQuery> queriesFor(WatchEntity watch) {
+        return queriesFor(watch, LocalDate.ofInstant(clock.instant(), ZoneOffset.UTC));
+    }
+
+    private List<RouteQuery> queriesFor(WatchEntity watch, LocalDate today) {
         Route route = Route.of(watch.getOrigin(), watch.getDestination());
         LocalDate start = watch.getDateFrom();
         LocalDate end = watch.getDateTo();
         if (end.isBefore(start)) throw new IllegalArgumentException("watch end precedes start");
+        if (end.isBefore(today)) return List.of();
+        if (start.isBefore(today)) start = today;
         String[] selected = watch.getPrograms();
         Set<Program> programs = new LinkedHashSet<>();
         if (selected == null) {

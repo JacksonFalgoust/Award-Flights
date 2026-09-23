@@ -140,6 +140,57 @@ class CrawlSchedulerTest {
         verify(runner).crawl(expected);
     }
 
+    @Test
+    void expiredWatchesDoNotReachHistoryOrRunner() {
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+        WatchEntity expired = datedWatch(today.minusDays(30), today.minusDays(1));
+        assertThat(scheduler.queriesFor(expired)).isEmpty();
+        when(watches.findAllByActiveTrueOrderByCreatedAtAsc()).thenReturn(List.of(expired));
+        scheduler.crawl();
+        verifyNoInteractions(runner, states);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 90, 91, 181})
+    void ongoingWindowsTrimPastDatesBeforeSplitting(int remainingDays) {
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+        List<RouteQuery> queries = scheduler.queriesFor(
+            datedWatch(today.minusDays(100), today.plusDays(remainingDays - 1)));
+        assertThat(queries).hasSize((remainingDays + 89) / 90);
+        assertThat(queries.stream().flatMap(query -> query.departureDates().dates()).toList())
+            .containsExactlyElementsOf(today.datesUntil(today.plusDays(remainingDays)).toList());
+    }
+
+    @Test
+    void expirationUsesUtcEvenWhenClockHasAnotherZoneAndKeepsToday() {
+        Clock otherZone = Clock.fixed(java.time.Instant.parse("2026-09-23T00:00:00Z"),
+            java.time.ZoneId.of("America/Los_Angeles"));
+        CrawlScheduler utcScheduler = new CrawlScheduler(watches, runner, states, otherZone);
+        LocalDate today = LocalDate.of(2026, 9, 23);
+        assertThat(utcScheduler.queriesFor(datedWatch(today.minusDays(2), today.minusDays(1)))).isEmpty();
+        assertThat(utcScheduler.queriesFor(datedWatch(today.minusDays(2), today)))
+            .singleElement().satisfies(query -> assertThat(query.departureDates())
+                .isEqualTo(com.awardwatch.domain.DateRange.single(today)));
+    }
+
+    @Test
+    void tickDispatchesOnlyTheRemainingDatesOfOngoingWatches() {
+        LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
+        when(watches.findAllByActiveTrueOrderByCreatedAtAsc()).thenReturn(List.of(
+            datedWatch(today.minusDays(10), today.minusDays(1)),
+            datedWatch(today.minusDays(10), today.plusDays(1))));
+        scheduler.crawl();
+        ArgumentCaptor<RouteQuery> fetched = ArgumentCaptor.forClass(RouteQuery.class);
+        verify(runner).crawl(fetched.capture());
+        assertThat(fetched.getValue().departureDates())
+            .isEqualTo(new com.awardwatch.domain.DateRange(today, today.plusDays(1)));
+    }
+
+    private WatchEntity datedWatch(LocalDate from, LocalDate to) {
+        return new WatchEntity(new AppUserEntity("test@example.com", "hash"), "ATL", "NRT",
+            from, to, new String[] {"J"}, new String[] {"AADVANTAGE"}, null, 1);
+    }
+
     private WatchEntity watch(int days, String... programs) {
         return new WatchEntity(new AppUserEntity("test@example.com", "hash"), "atl", "nrt",
             start, start.plusDays(days - 1), new String[] {"J", "F"}, programs, null, 1);
