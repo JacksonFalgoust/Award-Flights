@@ -38,6 +38,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
 
 @Component
 public final class SeatsAeroSource implements AvailabilitySource {
@@ -87,6 +88,17 @@ public final class SeatsAeroSource implements AvailabilitySource {
     @FunctionalInterface
     interface Sleeper {
         void sleep(Duration duration) throws InterruptedException;
+    }
+
+    /** Per-fetch accounting, invoked for every page and every retry. */
+    interface CallAccounting {
+        CallAccounting NONE = new CallAccounting() {
+            public void beforeCall() { }
+            public void transportFailed() { }
+        };
+
+        void beforeCall();
+        void transportFailed();
     }
 
     record ObservedAvailability(
@@ -609,9 +621,16 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
     @Override
     public Snapshot fetch(RouteQuery query) throws AvailabilitySourceException {
-        Objects.requireNonNull(query, "query cannot be null");
+        return fetch(query, CallAccounting.NONE);
+    }
 
-        List<AvailabilityEntry> entries = reconcileCandidates(fetchCandidates(query));
+    Snapshot fetch(RouteQuery query, CallAccounting accounting) throws AvailabilitySourceException {
+        Objects.requireNonNull(query, "query cannot be null");
+        Objects.requireNonNull(accounting, "accounting cannot be null");
+
+        List<AvailabilityEntry> entries = reconcileCandidates(mapCandidates(
+            query, validateAvailabilities(query, fetchAllPages(query, accounting))
+        ));
         Instant fetchedAt = clock.instant();
 
         try {
@@ -634,6 +653,12 @@ public final class SeatsAeroSource implements AvailabilitySource {
     List<ObservedAvailability> fetchAllPages(
         RouteQuery query
     ) throws AvailabilitySourceException {
+        return fetchAllPages(query, CallAccounting.NONE);
+    }
+
+    private List<ObservedAvailability> fetchAllPages(
+        RouteQuery query, CallAccounting accounting
+    ) throws AvailabilitySourceException {
         SeatsAeroSearchRequest request = createInitialSearchRequest(query);
 
         Map<String, ObservedAvailability> availabilityById = new LinkedHashMap<>();
@@ -641,7 +666,7 @@ public final class SeatsAeroSource implements AvailabilitySource {
         Long paginationCursor = null;
 
         while (true) {
-            String responseBody = search(query, request);
+            String responseBody = search(query, request, accounting);
             Instant observedAt = clock.instant();
 
             SeatsAeroSearchResponse response = parseSearchResponse(query, responseBody);
@@ -692,12 +717,14 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
     private String search(
         RouteQuery query,
-        SeatsAeroSearchRequest request
+        SeatsAeroSearchRequest request,
+        CallAccounting accounting
     ) throws AvailabilitySourceException {
         Duration retryDelay = INITIAL_RETRY_DELAY;
         int attempt = 1;
 
         while (true) {
+            accounting.beforeCall();
             try {
                 return client.search(request);
             } catch (RestClientResponseException exception) {
@@ -721,6 +748,9 @@ public final class SeatsAeroSource implements AvailabilitySource {
 
                 throw mapResponseFailure(query, exception);
             } catch (RestClientException exception) {
+                if (exception instanceof ResourceAccessException) {
+                    accounting.transportFailed();
+                }
                 throw AvailabilitySourceException.retryable(
                     query,
                     "Seats.aero request failed before a response was received",

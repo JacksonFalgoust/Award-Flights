@@ -469,7 +469,19 @@ score = urgency * staleness * hitRate
 - `hitRate` — decayed rate at which this route has produced non-empty results.
   Routes that return nothing 20 times running get demoted, not dropped.
 
-Highest scores are crawled first until the budget for that tick is spent.
+The initial implementation scores each deduplicated `RouteQuery` using its own
+chunk start date and full crawl-state key (route, program and date range):
+`urgency = 1 + max(0, 21 - max(0, daysUntilStart)) / 21`, using UTC dates;
+`staleness = clamp(minutesSinceLastCrawl, 0, 1440)`, with unseen queries at 1440;
+`hitRate = max(0.1, 0.9 ^ consecutiveEmpty)`. This hit-rate proxy uses the existing
+empty streak, rather than a historical moving average. A non-empty success resets
+it to 1; failures leave history unchanged. The floor prevents empty routes from
+receiving zero priority. The staleness cap limits priority but does not guarantee
+starvation freedom under sustained quota pressure.
+
+Highest scores are crawled first until the budget for that tick is spent. Ties
+retain watch creation and query expansion order. History is loaded before ranking
+and all scores use the same clock instant.
 
 **Redis caching.** Identical route+date queries within a TTL (15 min) serve from
 cache and cost zero quota. This mostly protects against a user hammering the

@@ -1,11 +1,14 @@
 package com.awardwatch;
 
 import com.awardwatch.persistence.SnapshotRepository;
+import com.awardwatch.persistence.WatchRepository;
+import com.awardwatch.persistence.CrawlStateRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest(properties = {
+	"crawl.enabled=false",
 	"seats-aero.api-key=test-key-not-a-secret",
 	"spring.autoconfigure.exclude="
 		+ "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
@@ -16,6 +19,12 @@ class AwardWatchApplicationTests {
 
 	@MockitoBean
 	SnapshotRepository snapshotRepository;
+
+	@MockitoBean
+	WatchRepository watchRepository;
+
+	@MockitoBean
+	CrawlStateRepository crawlStateRepository;
 
 	@Test
 	void contextLoads() {

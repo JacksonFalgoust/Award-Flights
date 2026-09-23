@@ -177,13 +177,20 @@ plan changes.
         may use the protected floor. Date-explicit reservations and refunds keep
         late refunds on the original UTC day; keys expire at that day's midnight
         plus two days. Callers must refund at most once per successful reservation.
-        HTTP wiring (including per-page/per-retry accounting) remains separate.
-- [ ] `@Scheduled` `CrawlScheduler` running every 5 minutes.
-      - [ ] Split a `watch` window longer than `DateRange.MAX_DAYS` (90) into
+        The scheduled crawl path reserves per page and per retry, refunds transport
+        failures, and records net calls used. Direct `AvailabilitySource.fetch`
+        callers must still provide their own budgeting.
+- [x] `@Scheduled` `CrawlScheduler` running every 5 minutes.
+      - [x] Split a `watch` window longer than `DateRange.MAX_DAYS` (90) into
             several `RouteQuery` objects. `DateRange` rejects a wider span at
             construction, so an unsplit long watch is a hard failure, not a slow one.
-- [ ] Route scoring: `urgency * staleness * hitRate` (formula in ARCHITECTURE §5).
-      - [ ] Unit test the scorer directly — it's pure logic, no excuse not to.
+      - UTC cron defaults to `0 */5 * * * *`; `CRAWL_ENABLED=false` disables
+        background ticks and `CRAWL_CRON` overrides the cadence. Active watches
+        run in descending score order (creation order breaks ties); identical queries are
+        deduplicated within a tick, and quota exhaustion stops the tick. Successful
+        snapshots and crawl state commit together; failures are never baselines.
+- [x] Route scoring: `urgency * staleness * hitRate` (formula in ARCHITECTURE §5).
+      - [x] Unit test the scorer directly — it's pure logic, no excuse not to.
 - [ ] Redis response cache with 15-minute TTL, keyed by normalized query.
 - [ ] Distributed lock per route so two ticks can't crawl the same route at once.
 - [ ] Log every call with its cost. You need to see where quota went.
