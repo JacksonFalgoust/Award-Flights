@@ -27,6 +27,7 @@ import org.testcontainers.postgresql.PostgreSQLContainer;
 @SpringBootTest(
     webEnvironment = SpringBootTest.WebEnvironment.NONE,
     properties = {
+        "crawl.enabled=false",
         "seats-aero.api-key=test-key-not-a-secret",
         "spring.data.redis.repositories.enabled=false",
         "spring.jpa.open-in-view=false"
@@ -57,6 +58,9 @@ class PersistenceIntegrationTest {
     private SnapshotService snapshotService;
 
     @Autowired
+    private CrawlResultService crawlResultService;
+
+    @Autowired
     private SnapshotRepository snapshotRepository;
 
     @Autowired
@@ -83,6 +87,27 @@ class PersistenceIntegrationTest {
             "TRUNCATE TABLE alert_event, availability_entry, snapshot, "
                 + "watch, app_user, crawl_state RESTART IDENTITY CASCADE"
         );
+    }
+
+    @Test
+    void crawlPersistsSnapshotAndUpdatesHistoryTogether() {
+        RouteQuery query = query(ATL_NRT, Program.AADVANTAGE);
+        Instant fetchedAt = Instant.parse("2026-09-21T18:00:00Z");
+        CrawlStateId id = new CrawlStateId("ATL", "NRT", Program.AADVANTAGE,
+            OCTOBER.start(), OCTOBER.end());
+        crawlResultService.record(new Snapshot(query, fetchedAt, List.of()), 2, "seats.aero");
+        assertThat(snapshotRepository.count()).isEqualTo(1);
+        CrawlStateEntity state = crawlStateRepository.findById(id).orElseThrow();
+        assertThat(state.getLastCrawledAt()).isEqualTo(fetchedAt);
+        assertThat(state.getConsecutiveEmpty()).isEqualTo(1);
+        crawlResultService.record(new Snapshot(query, fetchedAt.plusSeconds(300), List.of()),
+            1, "seats.aero");
+        assertThat(crawlStateRepository.findById(id).orElseThrow().getConsecutiveEmpty()).isEqualTo(2);
+        crawlResultService.record(new Snapshot(query, fetchedAt.plusSeconds(600), List.of(
+            entry(query, OCTOBER.start(), Cabin.BUSINESS, 60000, 1, true, fetchedAt)
+        )), 1, "seats.aero");
+        assertThat(crawlStateRepository.findById(id).orElseThrow().getConsecutiveEmpty()).isZero();
+        assertThat(snapshotRepository.count()).isEqualTo(3);
     }
 
     @Test

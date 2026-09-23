@@ -456,7 +456,13 @@ over saved watches wastes most of it on routes nobody is waiting on.
 atomically per call so a crash mid-run can't double-spend. It refuses to hand out
 the last ~10% so a user-triggered manual search always has room.
 
-`CrawlScheduler` scores every route with an active watch:
+`CrawlScheduler` first skips active watches whose date window has ended and trims
+ongoing windows to the tick's UTC date, keeping today eligible. It then splits the
+remaining dates into queries and scores each one. The same tick instant drives
+date filtering and urgency; the original watch is unchanged. Query identities and
+crawl history keys reflect the trimmed ranges.
+
+`CrawlScheduler` scores every route with an eligible active watch:
 
 ```
 score = urgency * staleness * hitRate
@@ -469,11 +475,63 @@ score = urgency * staleness * hitRate
 - `hitRate` — decayed rate at which this route has produced non-empty results.
   Routes that return nothing 20 times running get demoted, not dropped.
 
-Highest scores are crawled first until the budget for that tick is spent.
+The initial implementation scores each deduplicated `RouteQuery` using its own
+chunk start date and full crawl-state key (route, program and date range):
+`urgency = 1 + max(0, 21 - max(0, daysUntilStart)) / 21`, using UTC dates;
+`staleness = clamp(minutesSinceLastCrawl, 0, 1440)`, with unseen queries at 1440;
+`hitRate = max(0.1, 0.9 ^ consecutiveEmpty)`. This hit-rate proxy uses the existing
+empty streak, rather than a historical moving average. A non-empty success resets
+it to 1; failures leave history unchanged. The floor prevents empty routes from
+receiving zero priority. The staleness cap limits priority but does not guarantee
+starvation freedom under sustained quota pressure.
+
+Highest scores are crawled first until the budget for that tick is spent. Ties
+retain watch creation and query expansion order. History is loaded before ranking
+and all scores use the same clock instant.
 
 **Redis caching.** Identical route+date queries within a TTL (15 min) serve from
 cache and cost zero quota. This mostly protects against a user hammering the
 search box, and against overlapping watches on the same route.
+`ResponseCache` stores successful snapshots as JSON under a versioned seats.aero
+namespace, keyed by canonical airport codes, program and both date endpoints.
+Redis sets the value and 15-minute expiry atomically; reads never extend it.
+`CrawlRunner` checks it before reserving quota and fills it after persistence
+commits. Hits preserve original timestamps and do not append history or change
+crawl scoring. Successful empty responses are cached; failures and partial
+responses are not. Malformed or mismatched cached values are misses. Redis
+outages propagate, stopping the tick. Direct source fetches bypass the cache;
+the future manual search path can read the same `ResponseCache`.
+
+**Distributed crawl locks.** `RouteLock` acquires a Redis `SET NX` lease using
+canonical origin/destination, deliberately spanning programs and date ranges.
+`CrawlRunner` skips a busy route without spending quota or stopping the tick,
+rechecks the cache under the lock, and holds ownership through persistence and
+cache writes. The lease expires after two minutes and renews every 30 seconds;
+Lua renewal and release compare the unique ownership token atomically. Every page
+and retry, and each persistence/cache write, checks ownership before proceeding.
+Redis errors or lease loss stop the worker; try-with-resources releases the lease
+on every exit. A crashed worker's lease expires automatically. Direct source
+callers bypass this coordination. This is a single-Redis lease, not a fencing
+protocol: Redis failover or a process pause exceeding the lease can allow overlap
+with an operation already in flight. Ownership checks prevent subsequent work
+once loss is detected.
+
+**Call cost logging.** Each completed `SeatsAeroClient.search` attempt emits an
+INFO `upstream_call` event with a unique call ID, route, program slug, date range,
+pagination offset, outcome, HTTP status, `cost` in quota calls and `duration_ms`.
+This includes retries, pages and direct client calls. HTTP responses (including
+errors and malformed payloads) cost 1. Only confirmed pre-send failures (DNS,
+connection refusal/unreachable host, or an explicit connection timeout) cost 0
+and qualify for a quota refund. Read timeouts, connection resets, TLS errors and
+unknown I/O failures retain cost 1 because the provider may already have charged
+the request. `RequestFailurePolicy` applies the same classification to logging
+and refunds. Other client errors conservatively retain cost 1. These are policy
+costs, not upstream billing measurements. Cache hits and rejected reservations
+make no HTTP attempt and emit no call-cost event. `quota_refund` events separately
+report the original UTC reservation date and whether the Redis refund applied or
+failed; a failed refund leaves the local counter debited despite transport cost 0.
+Credentials, headers, bodies and exception messages are omitted from these events.
+An in-flight request interrupted by process termination may have no completion log.
 
 ---
 
