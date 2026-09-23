@@ -496,6 +496,20 @@ responses are not. Malformed or mismatched cached values are misses. Redis
 outages propagate, stopping the tick. Direct source fetches bypass the cache;
 the future manual search path can read the same `ResponseCache`.
 
+**Distributed crawl locks.** `RouteLock` acquires a Redis `SET NX` lease using
+canonical origin/destination, deliberately spanning programs and date ranges.
+`CrawlRunner` skips a busy route without spending quota or stopping the tick,
+rechecks the cache under the lock, and holds ownership through persistence and
+cache writes. The lease expires after two minutes and renews every 30 seconds;
+Lua renewal and release compare the unique ownership token atomically. Every page
+and retry, and each persistence/cache write, checks ownership before proceeding.
+Redis errors or lease loss stop the worker; try-with-resources releases the lease
+on every exit. A crashed worker's lease expires automatically. Direct source
+callers bypass this coordination. This is a single-Redis lease, not a fencing
+protocol: Redis failover or a process pause exceeding the lease can allow overlap
+with an operation already in flight. Ownership checks prevent subsequent work
+once loss is detected.
+
 ---
 
 ## 6. Diff-based alerting

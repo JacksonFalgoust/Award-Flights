@@ -10,16 +10,18 @@ import com.awardwatch.domain.Program;
 import com.awardwatch.domain.Route;
 import com.awardwatch.domain.RouteQuery;
 import com.awardwatch.domain.Snapshot;
-import java.util.List;
-import java.util.Optional;
 import com.awardwatch.persistence.CrawlResultService;
 import com.awardwatch.persistence.SnapshotService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.web.client.ResourceAccessException;
@@ -43,10 +45,13 @@ class CrawlRunnerTest {
     private final CrawlResultService results = mock(CrawlResultService.class);
     private final SnapshotService snapshots = mock(SnapshotService.class);
     private final ResponseCache cache = mock(ResponseCache.class);
+    private final RouteLock locks = mock(RouteLock.class);
+    private final RouteLock.Lease lease = mock(RouteLock.Lease.class);
     private CrawlRunner runner;
 
     @BeforeEach
     void setUp() {
+        when(locks.tryAcquire(QUERY.route())).thenReturn(Optional.of(lease));
         runner = runner(Clock.fixed(NOW, ZoneOffset.UTC));
         when(quota.tryReserve(any(LocalDate.class), eq(1))).thenReturn(true);
     }
@@ -55,7 +60,9 @@ class CrawlRunnerTest {
     void reservesBeforeEveryPageAndPersistsActualCallCount() {
         when(client.search(any())).thenReturn(FIRST_PAGE, EMPTY);
         assertThat(runner.crawl(QUERY)).isTrue();
-        InOrder order = inOrder(cache, quota, client, results);
+        InOrder order = inOrder(cache, locks, lease, quota, client, results);
+        order.verify(cache).get(QUERY);
+        order.verify(locks).tryAcquire(QUERY.route());
         order.verify(cache).get(QUERY);
         order.verify(quota).tryReserve(TODAY, 1);
         order.verify(client).search(any());
@@ -63,6 +70,7 @@ class CrawlRunnerTest {
         order.verify(client).search(any());
         order.verify(results).record(argThat(s -> s.query().equals(QUERY)), eq(2), eq("seats.aero"));
         order.verify(cache).put(argThat(s -> s.query().equals(QUERY)));
+        order.verify(lease).close();
         verifyNoInteractions(snapshots);
     }
 
@@ -186,9 +194,62 @@ class CrawlRunnerTest {
         verifyNoInteractions(results);
     }
 
+    @Test
+    void busyRouteSkipsWithoutStoppingTheTickOrSpendingQuota() {
+        when(locks.tryAcquire(QUERY.route())).thenReturn(Optional.empty());
+        assertThat(runner.crawl(QUERY)).isTrue();
+        verifyNoInteractions(client, quota, results, snapshots, lease);
+    }
+
+    @Test
+    void rechecksCacheUnderLockAndReleasesWithoutFetching() {
+        when(cache.get(QUERY)).thenReturn(Optional.empty()).thenReturn(Optional.of(new Snapshot(QUERY, NOW, List.of())));
+        assertThat(runner.crawl(QUERY)).isTrue();
+        verify(lease).close();
+        verifyNoInteractions(client, quota, results, snapshots);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"quota", "source", "persistence", "cache", "ownership"})
+    void releasesLockOnEveryFailurePath(String failure) {
+        when(client.search(any())).thenReturn(EMPTY);
+        switch (failure) {
+            case "quota" -> when(quota.tryReserve(any(LocalDate.class), eq(1))).thenReturn(false);
+            case "source" -> when(client.search(any())).thenThrow(http(401));
+            case "persistence" -> doThrow(new IllegalStateException("failed"))
+                .when(results).record(any(), anyInt(), anyString());
+            case "cache" -> doThrow(new IllegalStateException("failed")).when(cache).put(any());
+            case "ownership" -> doThrow(new IllegalStateException("lost")).when(lease).ensureHeld();
+        }
+        if (failure.equals("quota")) assertThat(runner.crawl(QUERY)).isFalse();
+        else if (failure.equals("source")) assertThat(runner.crawl(QUERY)).isTrue();
+        else assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(IllegalStateException.class);
+        verify(lease).close();
+        if (failure.equals("ownership")) verifyNoInteractions(client, quota, results, snapshots);
+    }
+
+    @Test
+    void lostLeaseAfterHttpPreventsPersistenceAndCacheWrites() {
+        when(client.search(any())).thenAnswer(invocation -> {
+            doThrow(new IllegalStateException("lost")).when(lease).ensureHeld();
+            return EMPTY;
+        });
+        assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(results, snapshots);
+        verify(cache, never()).put(any());
+        verify(lease).close();
+    }
+
+    @Test
+    void lockRedisFailureDoesNotAuthorizeHttp() {
+        when(locks.tryAcquire(QUERY.route())).thenThrow(new DataAccessResourceFailureException("offline"));
+        assertThatThrownBy(() -> runner.crawl(QUERY)).isInstanceOf(DataAccessResourceFailureException.class);
+        verifyNoInteractions(client, quota, results, snapshots, lease);
+    }
+
     private CrawlRunner runner(Clock clock) {
         SeatsAeroSource source = new SeatsAeroSource(client, JsonMapper.builder().build(), clock, delay -> { });
-        return new CrawlRunner(source, quota, results, snapshots, clock, cache);
+        return new CrawlRunner(source, quota, results, snapshots, clock, cache, locks);
     }
 
     private RestClientResponseException http(int status) {

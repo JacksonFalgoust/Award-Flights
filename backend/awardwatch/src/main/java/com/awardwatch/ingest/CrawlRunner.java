@@ -23,15 +23,17 @@ public class CrawlRunner {
     private final SnapshotService snapshots;
     private final Clock clock;
     private final ResponseCache cache;
+    private final RouteLock locks;
 
     public CrawlRunner(SeatsAeroSource source, QuotaBudgeter quota, CrawlResultService results,
-                       SnapshotService snapshots, Clock clock, ResponseCache cache) {
+                       SnapshotService snapshots, Clock clock, ResponseCache cache, RouteLock locks) {
         this.source = source;
         this.quota = quota;
         this.results = results;
         this.snapshots = snapshots;
         this.clock = clock;
         this.cache = cache;
+        this.locks = locks;
     }
 
     public boolean supports(Program program) {
@@ -41,32 +43,52 @@ public class CrawlRunner {
     /** Returns false when quota is exhausted, telling the scheduler to stop the tick. */
     public boolean crawl(RouteQuery query) {
         if (cache.get(query).isPresent()) return true;
-        CallBudget budget = new CallBudget();
+        var acquired = locks.tryAcquire(query.route());
+        if (acquired.isEmpty()) return true;
+        try (RouteLock.Lease lease = acquired.get()) {
+            // Another worker may have filled the cache between the first read and acquisition.
+            if (cache.get(query).isPresent()) return true;
+            return crawlLocked(query, lease);
+        }
+    }
+
+    private boolean crawlLocked(RouteQuery query, RouteLock.Lease lease) {
+        CallBudget budget = new CallBudget(lease);
         Snapshot snapshot;
         try {
             snapshot = source.fetch(query, budget);
         } catch (QuotaExhaustedException exception) {
             if (budget.callsUsed > 0) {
+                lease.ensureHeld();
                 snapshots.recordFailure(query, clock.instant(), budget.callsUsed, SOURCE);
             }
             LOGGER.info("Stopping crawl tick: quota unavailable for {}", query);
             return false;
         } catch (AvailabilitySourceException exception) {
+            lease.ensureHeld();
             snapshots.recordFailure(query, clock.instant(), budget.callsUsed, SOURCE);
             LOGGER.warn("Crawl failed for {}: {}", query, exception.getMessage());
             return true;
         }
+        lease.ensureHeld();
         results.record(snapshot, budget.callsUsed, SOURCE);
+        lease.ensureHeld();
         cache.put(snapshot);
         return true;
     }
 
     private final class CallBudget implements SeatsAeroSource.CallAccounting {
+        private final RouteLock.Lease lease;
         private int callsUsed;
         private LocalDate reservationDate;
 
+        private CallBudget(RouteLock.Lease lease) {
+            this.lease = lease;
+        }
+
         @Override
         public void beforeCall() {
+            lease.ensureHeld();
             // Persistence uses SMALLINT; refuse an unrecordable fetch before spending.
             if (callsUsed == Short.MAX_VALUE) {
                 throw new IllegalStateException("A crawl exceeded the maximum recordable call count");

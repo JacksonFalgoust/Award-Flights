@@ -196,7 +196,12 @@ plan changes.
       route, program and both date endpoints. Hits spend no quota and do not append
       snapshots or update scoring history. Reads do not extend expiry; failed and
       partial fetches are never cached. Direct source callers bypass this cache.
-- [ ] Distributed lock per route so two ticks can't crawl the same route at once.
+- [x] Distributed lock per route so two ticks can't crawl the same route at once.
+      Redis leases use canonical origin/destination (across programs and date ranges),
+      expire after two minutes and renew every 30 seconds. Busy routes are skipped;
+      owner-checked renewal/release protects successor locks. Cache is rechecked
+      under the lock, held through persistence and cache writes. Lease loss stops
+      further work at the next ownership check.
 - [ ] Log every call with its cost. You need to see where quota went.
 
 ---

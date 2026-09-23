@@ -35,6 +35,7 @@ class ResponseCacheIntegrationTest {
     private LettuceConnectionFactory connectionFactory;
     private StringRedisTemplate redis;
     private ResponseCache cache;
+    private RouteLock locks;
 
     @BeforeEach
     void setUp() {
@@ -44,11 +45,13 @@ class ResponseCacheIntegrationTest {
         try (var connection = connectionFactory.getConnection()) {
             connection.serverCommands().flushDb();
         }
+        locks = new RouteLock(redis);
         cache = new ResponseCache(redis, JsonMapper.builder().build());
     }
 
     @AfterEach
     void tearDown() {
+        locks.shutdown();
         connectionFactory.destroy();
     }
 
@@ -115,7 +118,7 @@ class ResponseCacheIntegrationTest {
         when(quota.tryReserve(any(LocalDate.class), eq(1))).thenReturn(true);
         when(client.search(any())).thenReturn("{\"data\":[],\"count\":0,\"hasMore\":false}");
         SeatsAeroSource source = new SeatsAeroSource(client, JsonMapper.builder().build(), clock, delay -> {});
-        CrawlRunner runner = new CrawlRunner(source, quota, results, failures, clock, cache);
+        CrawlRunner runner = new CrawlRunner(source, quota, results, failures, clock, cache, locks);
         assertThat(runner.crawl(query)).isTrue();
         assertThat(runner.crawl(query)).isTrue();
         verify(client).search(any());
@@ -128,6 +131,49 @@ class ResponseCacheIntegrationTest {
         verify(quota, times(2)).tryReserve(any(LocalDate.class), eq(1));
         verify(results, times(2)).record(any(), eq(1), eq("seats.aero"));
         verifyNoInteractions(failures);
+    }
+
+    @Test
+    void overlappingWorkersSkipBusyRouteAcrossProgramsAndDates() throws Exception {
+        SeatsAeroClient client = mock(SeatsAeroClient.class);
+        QuotaBudgeter quota = mock(QuotaBudgeter.class);
+        CrawlResultService results = mock(CrawlResultService.class);
+        SnapshotService failures = mock(SnapshotService.class);
+        Clock clock = Clock.fixed(fetchedAt, ZoneOffset.UTC);
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var finish = new java.util.concurrent.CountDownLatch(1);
+        when(quota.tryReserve(any(LocalDate.class), eq(1))).thenReturn(true);
+        when(client.search(any())).thenAnswer(invocation -> {
+            entered.countDown();
+            if (!finish.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new IllegalStateException("test timed out");
+            return "{\"data\":[],\"count\":0,\"hasMore\":false}";
+        });
+        SeatsAeroSource source = new SeatsAeroSource(client, JsonMapper.builder().build(), clock, delay -> {});
+        RouteLock otherLocks = new RouteLock(redis);
+        CrawlRunner first = new CrawlRunner(source, quota, results, failures, clock, cache, locks);
+        CrawlRunner second = new CrawlRunner(source, quota, results, failures, clock, cache, otherLocks);
+        try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var active = executor.submit(() -> first.crawl(query));
+            try {
+                assertThat(entered.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                RouteQuery differentProgramAndDates = new RouteQuery(query.route(),
+                    DateRange.single(query.departureDates().start().plusDays(1)), Program.AEROPLAN);
+                assertThat(second.crawl(differentProgramAndDates)).isTrue();
+                verify(client).search(any());
+                verify(quota).tryReserve(any(LocalDate.class), eq(1));
+                verifyNoInteractions(results);
+            } finally {
+                finish.countDown();
+            }
+            assertThat(active.get(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            assertThat(second.crawl(query)).isTrue(); // Now served from the first worker's cache.
+            verify(client).search(any());
+            RouteQuery unrelated = new RouteQuery(Route.of("ATL", "LHR"), query.departureDates(), query.program());
+            assertThat(second.crawl(unrelated)).isTrue();
+            verify(client, times(2)).search(any());
+        } finally {
+            otherLocks.shutdown();
+        }
     }
 
     private Long expiry() {

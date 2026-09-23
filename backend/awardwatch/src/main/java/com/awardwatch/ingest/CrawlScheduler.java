@@ -43,7 +43,7 @@ public class CrawlScheduler {
         this.clock = clock;
     }
 
-    /** Runs sequentially; caching and distributed locking are separate tasks. */
+    /** Runs sequentially within a tick; the runner caches responses and locks routes across ticks. */
     @Scheduled(cron = "${crawl.cron:0 */5 * * * *}", zone = "UTC")
     public void crawl() {
         Set<RouteQuery> queries = new LinkedHashSet<>();
