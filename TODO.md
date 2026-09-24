@@ -216,18 +216,22 @@ plan changes.
 
 ## Phase 5 — Alerting
 
-- [ ] `DiffEngine.diff(previous, current)` → `List<AvailabilityChange>`.
-      - [ ] Scope to `previous.dateRange().intersection(current.dateRange())` before
+- [x] `DiffEngine.diff(previous, current)` → `List<AvailabilityChange>`.
+      - [x] Scope to `previous.dateRange().intersection(current.dateRange())` before
             keying anything. Dates only one snapshot fetched were never compared,
             and counting them reads a narrowed range as a mass **GONE**. An empty
             intersection means the pair cannot be diffed at all — not that
             everything changed.
-      - [ ] Key on `(departureDate, program, cabin, nonstop)` — the nonstop and
+      - [x] Key on `(departureDate, program, cabin, nonstop)` — the nonstop and
             connecting awards in one cabin are separately priced products.
-      - [ ] Classify NEW / CHEAPER / MORE_SEATS / GONE.
-      - [ ] Unit tests, including: empty→populated, populated→empty,
+      - [x] Classify NEW / CHEAPER / MORE_SEATS / GONE.
+      - [x] Unit tests, including: empty→populated, populated→empty,
             price drop, seat count change, identical snapshots (must yield zero),
             and a narrowed date range (must yield zero, not a wave of **GONE**).
+      - Implemented as a pure comparator with a configurable mileage-drop threshold
+        (default 0; drop must exceed it). Unknown seat counts are incomparable;
+        simultaneous price and seat improvements emit both changes. Callers must
+        supply successful snapshots for the same route/program in time order.
 - [ ] **Guard against the false-positive trap:** a failed or empty-because-of-error
       snapshot must never serve as a diff baseline. Flag failed snapshots and skip them.
 - [ ] Watch filtering: cabins, programs, `max_mileage`, `min_seats`.
