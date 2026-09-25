@@ -366,7 +366,7 @@ CREATE TABLE watch (
     date_to         DATE NOT NULL,
     cabins          TEXT[] NOT NULL,          -- {'J','F'}
     programs        TEXT[],                   -- NULL = all programs
-    max_mileage     INTEGER,                  -- alert only below this
+    max_mileage     INTEGER,                  -- inclusive mileage ceiling
     min_seats       SMALLINT DEFAULT 1,
     active          BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -563,7 +563,14 @@ For each active watch, after a new snapshot lands:
    - key in both, `mileageCost` dropped by more than a threshold → **CHEAPER**
    - key in both, `seatsRemaining` increased → **MORE_SEATS**
    - key in old, absent from new → **GONE** (recorded, not alerted)
-5. Filter by the watch's `cabins`, `programs`, `max_mileage`, `min_seats`.
+5. `SnapshotDiffService.changesForWatch` applies `WatchFilter` to the guarded diff.
+   Match the current entry's cabin code and program name, route, and inclusive
+   watch date window. `max_mileage` is an inclusive ceiling (null is unlimited);
+   `min_seats` is an inclusive floor. Null programs means all programs. Unknown
+   seat counts signify availability and satisfy a one-seat watch only; zero never
+   qualifies. Paused watches and GONE changes produce no alert candidates. Raw
+   diffs retain GONE for history. Filter after diffing so price/seat improvements
+   that cross a watch's limits retain their original change classification.
 6. Suppress anything already in `alert_event` for this watch within a cooldown
    window (default 24h), so a seat that flickers in and out doesn't spam.
 7. Batch surviving changes into one email per watch per run.

@@ -7,6 +7,7 @@ import com.awardwatch.domain.RouteQuery;
 import com.awardwatch.domain.Snapshot;
 import com.awardwatch.persistence.SnapshotEntity;
 import com.awardwatch.persistence.SnapshotRepository;
+import com.awardwatch.persistence.WatchEntity;
 import java.util.List;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,6 +42,14 @@ public class SnapshotDiffService {
         }
         // Check again at the conversion boundary: failed rows must never become empty Snapshots.
         return engine.diff(toSnapshot(latest.get(1)), toSnapshot(latest.get(0)));
+    }
+
+    /** Watch-matching candidates, before cooldown suppression and notification. */
+    @Transactional(readOnly = true)
+    public List<AvailabilityChange> changesForWatch(long snapshotId, WatchEntity watch) {
+        java.util.Objects.requireNonNull(watch, "watch cannot be null");
+        if (!watch.isActive()) return List.of();
+        return new WatchFilter().filter(watch, diff(snapshotId));
     }
 
     private static Snapshot toSnapshot(SnapshotEntity entity) {

@@ -111,6 +111,23 @@ class SnapshotDiffServiceTest {
     }
 
     @Test
+    void watchCandidatesUseCurrentLimitsAfterGuardedDiff() {
+        var before = reading(1, true, 60000);
+        var current = reading(2, true, 50000);
+        latest(current, before);
+        var watch = new com.awardwatch.persistence.WatchEntity(
+            new com.awardwatch.persistence.AppUserEntity("test@example.com", "hash"),
+            "ATL", "NRT", DAY, DAY, new String[]{"J"}, new String[]{"AADVANTAGE"}, 50000, 2);
+        assertThat(service.changesForWatch(2, watch)).extracting(AvailabilityChange::type)
+            .containsExactly(CHEAPER);
+        reading(3, false, null);
+        assertThat(service.changesForWatch(3, watch)).isEmpty();
+        watch.setActive(false);
+        assertThat(service.changesForWatch(99, watch)).isEmpty();
+        verify(repository, never()).findById(99L);
+    }
+
+    @Test
     void unknownIdIsRejected() {
         assertThatThrownBy(() -> service.diff(99)).isInstanceOf(IllegalArgumentException.class);
     }

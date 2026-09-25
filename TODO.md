@@ -238,7 +238,13 @@ plan changes.
       compares the newest two successes inside a read transaction. Genuine empty
       successes remain valid; failed entities reject inventory entries. Regression
       tests cover failure/recovery and successful empty results, including PostgreSQL.
-- [ ] Watch filtering: cabins, programs, `max_mileage`, `min_seats`.
+- [x] Watch filtering: cabins, programs, `max_mileage`, `min_seats`.
+      `WatchFilter` checks current entries against cabin codes, program names,
+      inclusive mileage/seat limits, route and inclusive watch dates. Null programs
+      means all; null mileage means unlimited. Unknown seat counts satisfy only
+      one-seat watches; zero seats never qualifies. Paused watches and GONE changes
+      yield no alert candidates. `SnapshotDiffService.changesForWatch` applies the
+      filter after guarded diffing; raw diffs remain available for history.
 - [ ] Cooldown suppression via `alert_event` (default 24h per entry per watch).
 - [ ] `Notifier` interface + `EmailNotifier` (SMTP). Batch all changes for one
       watch into a single message.
