@@ -137,6 +137,9 @@ public class SnapshotEntity {
         if (entry.getSnapshot() != this) {
             throw new IllegalArgumentException("entry belongs to a different snapshot");
         }
+        if (!succeeded) {
+            throw new IllegalStateException("failed snapshots cannot contain availability entries");
+        }
         entries.add(entry);
     }
 }

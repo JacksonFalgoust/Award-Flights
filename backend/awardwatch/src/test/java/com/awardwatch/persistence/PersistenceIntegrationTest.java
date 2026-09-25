@@ -55,6 +55,9 @@ class PersistenceIntegrationTest {
     }
 
     @Autowired
+    private com.awardwatch.alerting.SnapshotDiffService snapshotDiffService;
+
+    @Autowired
     private SnapshotService snapshotService;
 
     @Autowired
@@ -108,6 +111,30 @@ class PersistenceIntegrationTest {
         )), 1, "seats.aero");
         assertThat(crawlStateRepository.findById(id).orElseThrow().getConsecutiveEmpty()).isZero();
         assertThat(snapshotRepository.count()).isEqualTo(3);
+    }
+
+    @Test
+    void diffSkipsFailedAttemptsAndPreservesSuccessfulEmptyReadings() {
+        RouteQuery query = query(ATL_NRT, Program.AADVANTAGE);
+        Instant time = Instant.parse("2026-09-21T18:00:00Z");
+        var award = entry(query, OCTOBER.start(), Cabin.BUSINESS, 60000, 2, true, time);
+        long first = snapshotService.record(new Snapshot(query, time, List.of(award)), 1, "seats.aero");
+        assertThat(snapshotDiffService.diff(first)).isEmpty();
+        long failed = snapshotService.recordFailure(query, time.plusSeconds(60), 1, "seats.aero");
+        assertThat(snapshotDiffService.diff(failed)).isEmpty();
+        long recovery = snapshotService.record(
+            new Snapshot(query, time.plusSeconds(120), List.of(award)), 1, "seats.aero");
+        assertThat(snapshotDiffService.diff(recovery)).isEmpty();
+        long empty = snapshotService.record(
+            new Snapshot(query, time.plusSeconds(180), List.of()), 1, "seats.aero");
+        assertThat(snapshotDiffService.diff(empty))
+            .extracting(com.awardwatch.alerting.AvailabilityChange::type)
+            .containsExactly(com.awardwatch.alerting.AvailabilityChange.Type.GONE);
+        long returned = snapshotService.record(
+            new Snapshot(query, time.plusSeconds(240), List.of(award)), 1, "seats.aero");
+        assertThat(snapshotDiffService.diff(returned))
+            .extracting(com.awardwatch.alerting.AvailabilityChange::type)
+            .containsExactly(com.awardwatch.alerting.AvailabilityChange.Type.NEW);
     }
 
     @Test

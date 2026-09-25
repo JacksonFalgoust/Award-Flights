@@ -232,8 +232,12 @@ plan changes.
         (default 0; drop must exceed it). Unknown seat counts are incomparable;
         simultaneous price and seat improvements emit both changes. Callers must
         supply successful snapshots for the same route/program in time order.
-- [ ] **Guard against the false-positive trap:** a failed or empty-because-of-error
+- [x] **Guard against the false-positive trap:** a failed or empty-because-of-error
       snapshot must never serve as a diff baseline. Flag failed snapshots and skip them.
+      `SnapshotDiffService.diff(snapshotId)` skips failed/first/stale readings and
+      compares the newest two successes inside a read transaction. Genuine empty
+      successes remain valid; failed entities reject inventory entries. Regression
+      tests cover failure/recovery and successful empty results, including PostgreSQL.
 - [ ] Watch filtering: cabins, programs, `max_mileage`, `min_seats`.
 - [ ] Cooldown suppression via `alert_event` (default 24h per entry per watch).
 - [ ] `Notifier` interface + `EmailNotifier` (SMTP). Batch all changes for one
